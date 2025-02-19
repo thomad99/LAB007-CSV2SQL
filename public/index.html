@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CSV2POSTGRES Uploader</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .upload-container {
+            border: 2px dashed #ccc;
+            padding: 20px;
+            text-align: center;
+            margin: 20px 0;
+        }
+        .form-group {
+            margin: 15px 0;
+        }
+        .status {
+            margin-top: 20px;
+            padding: 10px;
+            display: none;
+        }
+        .success {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .debug-window {
+            background-color: #2b2b2b;
+            color: #fff;
+            padding: 10px;
+            margin-top: 20px;
+            border-radius: 4px;
+            height: 200px;
+            overflow-y: auto;
+        }
+        .debug-entry {
+            margin: 5px 0;
+            font-family: monospace;
+            font-size: 14px;
+        }
+        .debug-time {
+            color: #8bc34a;
+        }
+        .debug-message {
+            color: #64b5f6;
+        }
+        .debug-error {
+            color: #ff5252;
+        }
+    </style>
+</head>
+<body>
+    <h1>CSV to PostgreSQL Uploader</h1>
+    <div class="upload-container">
+        <form id="uploadForm">
+            <div class="form-group">
+                <label for="csvFile">Select CSV File:</label>
+                <input type="file" id="csvFile" name="file" accept=".csv" required>
+            </div>
+            <div class="form-group">
+                <label for="tableName">Table Name:</label>
+                <input type="text" id="tableName" name="tableName" placeholder="Enter table name (optional)">
+            </div>
+            <button type="submit">Upload and Import</button>
+        </form>
+    </div>
+    <div id="status" class="status"></div>
+    <div id="debugWindow" class="debug-window"></div>
+
+    <script>
+        const form = document.getElementById('uploadForm');
+        const status = document.getElementById('status');
+        const debugWindow = document.getElementById('debugWindow');
+
+        function logDebug(message, isError = false) {
+            const now = new Date();
+            const timestamp = now.toLocaleTimeString() + '.' + now.getMilliseconds().toString().padStart(3, '0');
+            const entry = document.createElement('div');
+            entry.className = 'debug-entry';
+            entry.innerHTML = `<span class="debug-time">[${timestamp}]</span> <span class="${isError ? 'debug-error' : 'debug-message'}">${message}</span>`;
+            debugWindow.appendChild(entry);
+            debugWindow.scrollTop = debugWindow.scrollHeight;
+        }
+
+        // Log file selection
+        document.getElementById('csvFile').addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                logDebug(`File selected: ${file.name} (${(file.size / 1024).toFixed(2)} KB)`);
+            }
+        });
+
+        // Log table name changes
+        document.getElementById('tableName').addEventListener('input', (e) => {
+            logDebug(`Table name updated: ${e.target.value || '(default)'}`);
+        });
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const formData = new FormData();
+            const fileInput = document.getElementById('csvFile');
+            const tableNameInput = document.getElementById('tableName');
+            
+            const file = fileInput.files[0];
+            formData.append('file', file);
+            if (tableNameInput.value) {
+                formData.append('tableName', tableNameInput.value);
+            }
+
+            logDebug(`Starting upload of ${file.name}`);
+            status.style.display = 'block';
+            status.textContent = 'Uploading and processing...';
+            status.className = 'status';
+
+            const startTime = Date.now();
+
+            try {
+                logDebug('Sending file to server...');
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+                const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+
+                if (response.ok) {
+                    logDebug(`Success! Imported ${result.rowsImported} rows in ${duration}s`);
+                    status.textContent = `Success! ${result.rowsImported} rows imported.`;
+                    status.classList.add('success');
+                    form.reset();
+                } else {
+                    const errorMsg = `Error: ${result.error}`;
+                    logDebug(errorMsg, true);
+                    status.textContent = errorMsg;
+                    status.classList.add('error');
+                }
+            } catch (error) {
+                const errorMsg = 'Error: Failed to upload file';
+                logDebug(errorMsg, true);
+                logDebug(`Technical details: ${error.message}`, true);
+                status.textContent = errorMsg;
+                status.classList.add('error');
+            }
+        });
+
+        // Initial debug message
+        logDebug('CSV2POSTGRES Uploader initialized');
+    </script>
+</body>
+</html> 
