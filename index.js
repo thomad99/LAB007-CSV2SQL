@@ -5,6 +5,7 @@ const { parse } = require('csv-parse');
 const fs = require('fs');
 const path = require('path');
 const pool = require('./config/database.js');
+const { Pool } = require('pg');
 
 // Load environment variables
 dotenv.config();
@@ -81,6 +82,60 @@ app.post('/upload', upload.single('file'), async (req, res) => {
     console.error('File processing error:', error);
     res.status(500).json({ error: 'File processing failed' });
   }
+});
+
+// Chat endpoint
+app.post('/api/chat', async (req, res) => {
+    const { query } = req.body;
+    
+    try {
+        // Simple keyword-based query parsing
+        const lowerQuery = query.toLowerCase();
+        let sqlQuery = '';
+        let params = [];
+
+        if (lowerQuery.includes('sailor') && lowerQuery.includes('race')) {
+            // Extract sailor name from query
+            const nameMatch = query.match(/sailor\s+([A-Za-z\s]+)(?=\s+(?:do|perform|race))/i);
+            if (nameMatch) {
+                const sailorName = nameMatch[1].trim();
+                sqlQuery = `
+                    SELECT 
+                        races.date,
+                        races.name as race_name,
+                        sailors.name as sailor_name,
+                        results.position,
+                        results.points
+                    FROM results
+                    JOIN races ON results.race_id = races.id
+                    JOIN sailors ON results.sailor_id = sailors.id
+                    WHERE LOWER(sailors.name) LIKE LOWER($1)
+                    ORDER BY races.date DESC
+                `;
+                params = [`%${sailorName}%`];
+            }
+        }
+
+        if (sqlQuery) {
+            const result = await pool.query(sqlQuery, params);
+            res.json({
+                message: `Here are the results for your query:`,
+                data: result.rows
+            });
+        } else {
+            res.json({
+                message: "I'm not sure how to answer that question. Try asking about a sailor's race results."
+            });
+        }
+    } catch (error) {
+        console.error('Chat query error:', error);
+        res.status(500).json({ error: 'Failed to process your question' });
+    }
+});
+
+// Update the root route to serve the chat interface
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'chat.html'));
 });
 
 // Serve the HTML page for any other routes
