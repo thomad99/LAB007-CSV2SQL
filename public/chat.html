@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Database Chat Interface</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -103,6 +104,18 @@
                 overflow-x: auto;
             }
         }
+        .chart-container {
+            margin-top: 15px;
+            padding: 10px;
+            background-color: white;
+            border-radius: 5px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .chart-wrapper {
+            position: relative;
+            height: 300px;
+            width: 100%;
+        }
     </style>
 </head>
 <body>
@@ -171,6 +184,62 @@
             return table;
         }
 
+        function createChart(data, type = 'line') {
+            const chartDiv = document.createElement('div');
+            chartDiv.className = 'chart-container';
+            const canvas = document.createElement('canvas');
+            chartDiv.appendChild(canvas);
+
+            let config;
+            if (type === 'line') {
+                config = {
+                    type: 'line',
+                    data: {
+                        labels: data.map(d => d.race_date),
+                        datasets: [{
+                            label: 'Position',
+                            data: data.map(d => d.position),
+                            borderColor: '#007bff',
+                            tension: 0.1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            y: {
+                                reverse: true,
+                                beginAtZero: true,
+                                title: {
+                                    display: true,
+                                    text: 'Position'
+                                }
+                            }
+                        }
+                    }
+                };
+            } else if (type === 'bar') {
+                config = {
+                    type: 'bar',
+                    data: {
+                        labels: data.map(d => d.race_name),
+                        datasets: [{
+                            label: 'Points',
+                            data: data.map(d => d.points),
+                            backgroundColor: '#007bff'
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false
+                    }
+                };
+            }
+
+            new Chart(canvas, config);
+            return chartDiv;
+        }
+
         chatForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             const query = userInput.value.trim();
@@ -198,8 +267,19 @@
                 } else {
                     messageDiv.textContent = result.message;
                     if (result.data) {
+                        // Add table
                         const table = createTableFromData(result.data);
                         messageDiv.appendChild(table);
+
+                        // Add visualization if appropriate
+                        if (result.data.length > 0 && result.data[0].position) {
+                            const chartDiv = createChart(result.data, 'line');
+                            messageDiv.appendChild(chartDiv);
+                        }
+                        if (result.data.length > 0 && result.data[0].points) {
+                            const pointsChartDiv = createChart(result.data, 'bar');
+                            messageDiv.appendChild(pointsChartDiv);
+                        }
                     }
                 }
                 
