@@ -3,8 +3,8 @@ const dotenv = require('dotenv');
 const multer = require('multer');
 const { parse } = require('csv-parse');
 const fs = require('fs');
-const pool = require('./config/database');
 const path = require('path');
+const pool = require('./config/database.js');
 
 // Load environment variables
 dotenv.config();
