@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Database Chat Interface</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .chat-container {
+            background-color: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            height: calc(100vh - 200px);
+            display: flex;
+            flex-direction: column;
+        }
+        .chat-messages {
+            flex-grow: 1;
+            overflow-y: auto;
+            padding: 20px;
+        }
+        .message {
+            margin-bottom: 20px;
+            max-width: 80%;
+        }
+        .user-message {
+            margin-left: auto;
+            background-color: #007bff;
+            color: white;
+            padding: 10px 15px;
+            border-radius: 15px 15px 0 15px;
+        }
+        .bot-message {
+            margin-right: auto;
+            background-color: #e9ecef;
+            color: #212529;
+            padding: 10px 15px;
+            border-radius: 15px 15px 15px 0;
+        }
+        .chat-input {
+            padding: 20px;
+            border-top: 1px solid #dee2e6;
+        }
+        .input-group {
+            display: flex;
+            gap: 10px;
+        }
+        input[type="text"] {
+            flex-grow: 1;
+            padding: 15px;
+            border: 1px solid #dee2e6;
+            border-radius: 25px;
+            font-size: 16px;
+        }
+        button {
+            padding: 15px 30px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .table-response {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+            background-color: white;
+            border-radius: 5px;
+            overflow: hidden;
+        }
+        .table-response th, .table-response td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #dee2e6;
+        }
+        .table-response th {
+            background-color: #f8f9fa;
+            font-weight: 600;
+        }
+        @media (max-width: 600px) {
+            .container {
+                padding: 10px;
+            }
+            .message {
+                max-width: 90%;
+            }
+            .table-response {
+                display: block;
+                overflow-x: auto;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="chat-container">
+            <div class="chat-messages" id="chatMessages">
+                <div class="message bot-message">
+                    Hello! I can help you query the sailing database. Ask me questions like "How did sailor Dominic Thomas perform in races this year?" or "Show me all race results from July 2023"
+                </div>
+            </div>
+            <div class="chat-input">
+                <form id="chatForm">
+                    <div class="input-group">
+                        <input type="text" id="userInput" placeholder="Ask about your sailing data..." required>
+                        <button type="submit">Send</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const chatForm = document.getElementById('chatForm');
+        const chatMessages = document.getElementById('chatMessages');
+        const userInput = document.getElementById('userInput');
+
+        function addMessage(message, isUser = false) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${isUser ? 'user-message' : 'bot-message'}`;
+            messageDiv.textContent = message;
+            chatMessages.appendChild(messageDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        function createTableFromData(data) {
+            if (!Array.isArray(data) || data.length === 0) return '';
+            
+            const headers = Object.keys(data[0]);
+            const table = document.createElement('table');
+            table.className = 'table-response';
+            
+            // Create header
+            const thead = document.createElement('thead');
+            const headerRow = document.createElement('tr');
+            headers.forEach(header => {
+                const th = document.createElement('th');
+                th.textContent = header.replace(/_/g, ' ').toUpperCase();
+                headerRow.appendChild(th);
+            });
+            thead.appendChild(headerRow);
+            table.appendChild(thead);
+            
+            // Create body
+            const tbody = document.createElement('tbody');
+            data.forEach(row => {
+                const tr = document.createElement('tr');
+                headers.forEach(header => {
+                    const td = document.createElement('td');
+                    td.textContent = row[header];
+                    tr.appendChild(td);
+                });
+                tbody.appendChild(tr);
+            });
+            table.appendChild(tbody);
+            
+            return table;
+        }
+
+        chatForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const query = userInput.value.trim();
+            if (!query) return;
+
+            addMessage(query, true);
+            userInput.value = '';
+
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ query })
+                });
+
+                const result = await response.json();
+                
+                const messageDiv = document.createElement('div');
+                messageDiv.className = 'message bot-message';
+                
+                if (result.error) {
+                    messageDiv.textContent = `Error: ${result.error}`;
+                } else {
+                    messageDiv.textContent = result.message;
+                    if (result.data) {
+                        const table = createTableFromData(result.data);
+                        messageDiv.appendChild(table);
+                    }
+                }
+                
+                chatMessages.appendChild(messageDiv);
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+            } catch (error) {
+                addMessage('Sorry, there was an error processing your request.', false);
+            }
+        });
+    </script>
+</body>
+</html> 
