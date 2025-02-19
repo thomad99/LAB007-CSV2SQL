@@ -1,0 +1,23 @@
+{
+  "name": "lab007-csv2postgres",
+  "version": "1.0.0",
+  "description": "A service to import CSV files to PostgreSQL database",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "keywords": ["csv", "postgresql", "data import"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.18.2",
+    "dotenv": "^16.3.1",
+    "pg": "^8.11.3",
+    "csv-parse": "^5.5.3",
+    "multer": "^1.4.5-lts.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+} 
