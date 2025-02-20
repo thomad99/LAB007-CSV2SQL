@@ -102,19 +102,19 @@ function generateSQL(analysis) {
 // Add this function to create tables if they don't exist
 async function initializeDatabase() {
     try {
-        // Drop existing tables in correct order (due to foreign key constraints)
+        // Drop existing tables in correct order
         await pool.query(`
             DROP TABLE IF EXISTS results CASCADE;
             DROP TABLE IF EXISTS races CASCADE;
             DROP TABLE IF EXISTS skippers CASCADE;
         `);
 
-        // Create new tables
+        // Create new tables with nullable fields
         await pool.query(`
             CREATE TABLE IF NOT EXISTS races (
                 id SERIAL PRIMARY KEY,
-                regatta_name VARCHAR(100) NOT NULL,
-                regatta_date DATE NOT NULL,
+                regatta_name VARCHAR(100),
+                regatta_date DATE,
                 category VARCHAR(50),
                 boat_name VARCHAR(100),
                 sail_number VARCHAR(20)
@@ -130,7 +130,7 @@ async function initializeDatabase() {
                 id SERIAL PRIMARY KEY,
                 race_id INTEGER REFERENCES races(id),
                 skipper_id INTEGER REFERENCES skippers(id),
-                position INTEGER NOT NULL,
+                position INTEGER,
                 total_points DECIMAL(5,2)
             );
         `);
@@ -224,7 +224,7 @@ app.post('/upload', upload.single('file'), async (req, res) => {
                         // First, ensure the skipper exists
                         const skipperResult = await pool.query(
                             'INSERT INTO skippers (name, yacht_club) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET yacht_club = EXCLUDED.yacht_club RETURNING id',
-                            [row.Skipper, row.Yacht_Club]
+                            [row.Skipper || null, row.Yacht_Club || null]
                         );
                         const skipperId = skipperResult.rows[0].id;
 
@@ -232,19 +232,23 @@ app.post('/upload', upload.single('file'), async (req, res) => {
                         const raceResult = await pool.query(
                             'INSERT INTO races (regatta_name, regatta_date, category, boat_name, sail_number) VALUES ($1, $2, $3, $4, $5) RETURNING id',
                             [
-                                row.Regatta_Name,
-                                row.Regatta_Date,
-                                row.Category,
-                                row.Boat_Name,
-                                row.Sail_Number
+                                row.Regatta_Name || null,
+                                row.Regatta_Date || null,
+                                row.Category || null,
+                                row.Boat_Name || null,
+                                row.Sail_Number || null
                             ]
                         );
                         const raceId = raceResult.rows[0].id;
 
+                        // Handle empty numeric values
+                        const position = row.Position ? parseInt(row.Position) : null;
+                        const totalPoints = row.Total_Points ? parseFloat(row.Total_Points) : null;
+
                         // Finally, store the result
                         await pool.query(
                             'INSERT INTO results (race_id, skipper_id, position, total_points) VALUES ($1, $2, $3, $4)',
-                            [raceId, skipperId, row.Position, row.Total_Points]
+                            [raceId, skipperId, position, totalPoints]
                         );
                     }
 
@@ -257,7 +261,10 @@ app.post('/upload', upload.single('file'), async (req, res) => {
                     });
                 } catch (error) {
                     console.error('Database error:', error);
-                    res.status(500).json({ error: 'Database operation failed' });
+                    res.status(500).json({ 
+                        error: 'Database operation failed',
+                        details: error.message 
+                    });
                 }
             });
     } catch (error) {
