@@ -245,10 +245,12 @@
             const query = userInput.value.trim();
             if (!query) return;
 
+            console.log('Sending query:', query);
             addMessage(query, true);
             userInput.value = '';
 
             try {
+                console.log('Making API request...');
                 const response = await fetch('/api/chat', {
                     method: 'POST',
                     headers: {
@@ -257,28 +259,37 @@
                     body: JSON.stringify({ query })
                 });
 
+                console.log('Got response:', response.status);
                 const result = await response.json();
+                console.log('Response data:', result);
                 
                 const messageDiv = document.createElement('div');
                 messageDiv.className = 'message bot-message';
                 
                 if (result.error) {
+                    console.error('Error in response:', result.error);
                     messageDiv.textContent = `Error: ${result.error}`;
                 } else {
                     messageDiv.textContent = result.message;
                     if (result.data) {
-                        // Add table
+                        console.log('Creating table with data:', result.data.length, 'rows');
                         const table = createTableFromData(result.data);
                         messageDiv.appendChild(table);
 
-                        // Add visualization if appropriate
-                        if (result.data.length > 0 && result.data[0].position) {
-                            const chartDiv = createChart(result.data, 'line');
-                            messageDiv.appendChild(chartDiv);
-                        }
-                        if (result.data.length > 0 && result.data[0].points) {
-                            const pointsChartDiv = createChart(result.data, 'bar');
-                            messageDiv.appendChild(pointsChartDiv);
+                        if (result.data.length > 0) {
+                            console.log('Data contains position:', !!result.data[0].position);
+                            console.log('Data contains points:', !!result.data[0].points);
+                            
+                            if (result.data[0].position) {
+                                console.log('Creating position chart');
+                                const chartDiv = createChart(result.data, 'line');
+                                messageDiv.appendChild(chartDiv);
+                            }
+                            if (result.data[0].points) {
+                                console.log('Creating points chart');
+                                const pointsChartDiv = createChart(result.data, 'bar');
+                                messageDiv.appendChild(pointsChartDiv);
+                            }
                         }
                     }
                 }
@@ -286,6 +297,7 @@
                 chatMessages.appendChild(messageDiv);
                 chatMessages.scrollTop = chatMessages.scrollHeight;
             } catch (error) {
+                console.error('Request error:', error);
                 addMessage('Sorry, there was an error processing your request.', false);
             }
         });
