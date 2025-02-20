@@ -30,20 +30,27 @@ app.get('/api/status', (req, res) => {
 });
 
 app.post('/api/chat', async (req, res) => {
+    console.log('Chat API called with query:', req.body.query);
     const { query } = req.body;
     
     try {
         const lowerQuery = query.toLowerCase();
+        console.log('Lowercase query:', lowerQuery);
         let sqlQuery = '';
         let params = [];
 
         if (lowerQuery.includes('sailor') && lowerQuery.includes('race')) {
+            console.log('Detected sailor and race keywords');
             // Extract sailor name from query
             const nameMatch = query.match(/sailor\s+([A-Za-z\s]+)(?=\s+(?:do|perform|race))/i);
+            console.log('Name match result:', nameMatch);
+            
             if (nameMatch) {
                 const sailorName = nameMatch[1].trim();
+                console.log('Extracted sailor name:', sailorName);
                 
                 if (lowerQuery.includes('this year')) {
+                    console.log('Query is for this year');
                     sqlQuery = `
                         SELECT 
                             TO_CHAR(races.date, 'YYYY-MM-DD') as race_date,
@@ -59,6 +66,7 @@ app.post('/api/chat', async (req, res) => {
                         ORDER BY races.date ASC
                     `;
                 } else {
+                    console.log('Query is for all time');
                     sqlQuery = `
                         SELECT 
                             TO_CHAR(races.date, 'YYYY-MM-DD') as race_date,
@@ -74,11 +82,15 @@ app.post('/api/chat', async (req, res) => {
                     `;
                 }
                 params = [`%${sailorName}%`];
+                console.log('SQL Query:', sqlQuery);
+                console.log('Parameters:', params);
             }
         }
 
         if (sqlQuery) {
+            console.log('Executing database query...');
             const result = await pool.query(sqlQuery, params);
+            console.log('Query results:', result.rows.length, 'rows found');
             let message = 'Here are the results for your query:';
             
             if (result.rows.length === 0) {
@@ -90,11 +102,13 @@ app.post('/api/chat', async (req, res) => {
                 message = `Found ${races} races for ${sailor}. Average position: ${avgPosition}`;
             }
 
+            console.log('Sending response:', message);
             res.json({
                 message,
                 data: result.rows
             });
         } else {
+            console.log('No SQL query generated, sending help message');
             res.json({
                 message: "I'm not sure how to answer that question. Try asking about a sailor's race results."
             });
