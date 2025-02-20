@@ -102,6 +102,14 @@ function generateSQL(analysis) {
 // Add this function to create tables if they don't exist
 async function initializeDatabase() {
     try {
+        // Drop existing tables in correct order (due to foreign key constraints)
+        await pool.query(`
+            DROP TABLE IF EXISTS results CASCADE;
+            DROP TABLE IF EXISTS races CASCADE;
+            DROP TABLE IF EXISTS skippers CASCADE;
+        `);
+
+        // Create new tables
         await pool.query(`
             CREATE TABLE IF NOT EXISTS races (
                 id SERIAL PRIMARY KEY,
@@ -114,7 +122,7 @@ async function initializeDatabase() {
 
             CREATE TABLE IF NOT EXISTS skippers (
                 id SERIAL PRIMARY KEY,
-                name VARCHAR(100) NOT NULL,
+                name VARCHAR(100) NOT NULL UNIQUE,
                 yacht_club VARCHAR(100)
             );
 
