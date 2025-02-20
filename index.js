@@ -45,6 +45,26 @@ async function backupTableData(tableName) {
     return backupTable;
 }
 
+// Add input validation helper
+function validateInput(value, type = 'string') {
+    if (value === null || value === undefined) return null;
+    
+    switch (type) {
+        case 'year':
+            const year = parseInt(value);
+            if (isNaN(year) || year < 1900 || year > 2100) return null;
+            return year;
+        case 'position':
+            const pos = parseInt(value);
+            if (isNaN(pos) || pos < 1) return null;
+            return pos;
+        case 'string':
+            return String(value).replace(/[%;]/g, '').trim();
+        default:
+            return null;
+    }
+}
+
 // Function to analyze query using GPT
 async function analyzeQuery(query) {
     try {
@@ -115,260 +135,93 @@ async function analyzeQuery(query) {
             temperature: 0.1,
         });
 
-        return JSON.parse(completion.choices[0].message.content);
+        // Add safety checks for the OpenAI response
+        if (!completion?.choices?.[0]?.message?.content) {
+            console.error('Invalid OpenAI response structure:', completion);
+            throw new Error('Failed to get a valid response from OpenAI');
+        }
+
+        try {
+            return JSON.parse(completion.choices[0].message.content);
+        } catch (parseError) {
+            console.error('Failed to parse OpenAI response:', completion.choices[0].message.content);
+            throw new Error('Failed to parse the AI response as JSON');
+        }
+
     } catch (error) {
         console.error('GPT Analysis error:', error);
         throw error;
     }
 }
 
-// Function to generate SQL based on analysis
+// Update generateSQL to use safer parameter handling
 function generateSQL(analysis) {
     let baseQuery = '';
+    const conditions = [];
     const params = [];
-    let paramCount = 1;
+    const values = {};
 
-    switch (analysis.queryType) {
-        case "sailor_stats":
-            baseQuery = `
-                SELECT 
-                    s.name as sailor_name,
-                    s.yacht_club,
-                    COUNT(DISTINCT r.id) as total_races,
-                    COUNT(DISTINCT CASE WHEN res.position = 1 THEN r.id END) as wins,
-                    COUNT(DISTINCT CASE WHEN res.position <= 3 THEN r.id END) as podiums,
-                    ROUND(AVG(res.position), 1) as avg_position,
-                    MIN(res.position) as best_position,
-                    array_agg(DISTINCT r.regatta_name) as regattas
-                FROM skippers s
-                LEFT JOIN results res ON s.id = res.skipper_id
-                LEFT JOIN races r ON res.race_id = r.id
-                WHERE 1=1
-                GROUP BY s.id, s.name, s.yacht_club
-            `;
-            break;
+    // Validate inputs
+    values.sailorName = validateInput(analysis.sailorName);
+    values.yachtClub = validateInput(analysis.yachtClub);
+    values.regattaName = validateInput(analysis.regattaName);
+    values.location = validateInput(analysis.location);
+    values.year = validateInput(analysis.year, 'year');
+    values.position = validateInput(analysis.position, 'position');
 
-        case "performance_stats":
-            baseQuery = `
-                WITH sailor_stats AS (
-                    SELECT 
-                        s.name,
-                        s.yacht_club,
-                        COUNT(DISTINCT r.id) as races,
-                        COUNT(DISTINCT CASE WHEN res.position = 1 THEN r.id END) as wins,
-                        ROUND(COUNT(DISTINCT CASE WHEN res.position = 1 THEN r.id END)::numeric / 
-                              NULLIF(COUNT(DISTINCT r.id), 0) * 100, 1) as win_percentage
-                    FROM skippers s
-                    LEFT JOIN results res ON s.id = res.skipper_id
-                    LEFT JOIN races r ON res.race_id = r.id
-                    GROUP BY s.id, s.name, s.yacht_club
-                )
-                SELECT *
-                FROM sailor_stats
-                WHERE races > 0
-                ORDER BY wins DESC, win_percentage DESC
-            `;
-            break;
-
-        case "regatta_count":
-            baseQuery = `
-                WITH regatta_info AS (
-                    SELECT DISTINCT
-                        regatta_name,
-                        regatta_date,
-                        COUNT(DISTINCT results.skipper_id) as participants
-                    FROM races
-                    LEFT JOIN results ON races.id = results.race_id
-                    GROUP BY regatta_name, regatta_date
-                )
-                SELECT 
-                    COUNT(*) as regatta_count,
-                    array_agg(regatta_name ORDER BY regatta_date DESC) as regatta_list,
-                    MIN(regatta_date) as earliest_date,
-                    MAX(regatta_date) as latest_date
-                FROM regatta_info
-            `;
-            break;
-
-        case "sailor_search":
-            baseQuery = `
-                SELECT DISTINCT
-                    s.name,
-                    s.yacht_club,
-                    COUNT(DISTINCT r.id) as total_races,
-                    COUNT(DISTINCT CASE WHEN res.position = 1 THEN r.id END) as wins,
-                    MIN(res.position) as best_position,
-                    MIN(r.regatta_date) as first_race,
-                    MAX(r.regatta_date) as last_race
-                FROM skippers s
-                LEFT JOIN results res ON s.id = res.skipper_id
-                LEFT JOIN races r ON res.race_id = r.id
-                WHERE 1=1
-                GROUP BY s.id, s.name, s.yacht_club
-                ORDER BY s.name ASC
-            `;
-            break;
-
-        case "database_status":
-            baseQuery = `
-                SELECT 
-                    COUNT(DISTINCT regatta_name) as total_regattas,
-                    COUNT(DISTINCT skippers.id) as total_sailors,
-                    MIN(regatta_date) as earliest_race,
-                    MAX(regatta_date) as latest_race,
-                    COUNT(DISTINCT yacht_club) as total_clubs
-                FROM races
-                LEFT JOIN results ON races.id = results.race_id
-                LEFT JOIN skippers ON results.skipper_id = skippers.id
-            `;
-            break;
-
-        case "location_races":
-            baseQuery = `
-                SELECT 
-                    regatta_name,
-                    regatta_date,
-                    COUNT(DISTINCT results.skipper_id) as participants
-                FROM races
-                LEFT JOIN results ON races.id = results.race_id
-                WHERE 1=1
-                GROUP BY regatta_name, regatta_date
-                ORDER BY regatta_date DESC
-            `;
-            break;
-
-        case "team_members":
-            baseQuery = `
-                SELECT 
-                    skippers.name,
-                    COUNT(DISTINCT races.id) as races_participated,
-                    array_agg(DISTINCT races.regatta_name) as regattas,
-                    MIN(results.position) as best_position
-                FROM skippers
-                LEFT JOIN results ON skippers.id = results.skipper_id
-                LEFT JOIN races ON results.race_id = races.id
-                WHERE 1=1
-                GROUP BY skippers.id, skippers.name
-                ORDER BY races_participated DESC
-            `;
-            break;
-
-        case "team_results":
-            baseQuery = `
-                SELECT 
-                    races.regatta_date,
-                    races.regatta_name,
-                    skippers.name as skipper,
-                    results.position,
-                    races.category
-                FROM results
-                JOIN races ON results.race_id = races.id
-                JOIN skippers ON results.skipper_id = skippers.id
-                WHERE 1=1
-                ORDER BY races.regatta_date DESC, results.position ASC
-            `;
-            break;
-
-        case "winner":
-            baseQuery = `
-                SELECT 
-                    skippers.name as skipper_name,
-                    skippers.yacht_club,
-                    COUNT(*) as wins,
-                    array_agg(races.regatta_name) as races_won
-                FROM results
-                JOIN races ON results.race_id = races.id
-                JOIN skippers ON results.skipper_id = skippers.id
-                WHERE position = 1
-            `;
-            break;
-
-        case "winners_list":
-            baseQuery = `
-                SELECT 
-                    TO_CHAR(races.regatta_date, 'YYYY-MM-DD') as race_date,
-                    races.regatta_name,
-                    skippers.name as skipper_name,
-                    skippers.yacht_club,
-                    races.category
-                FROM results
-                JOIN races ON results.race_id = races.id
-                JOIN skippers ON results.skipper_id = skippers.id
-                WHERE position = 1
-            `;
-            break;
-
-        default:
-            baseQuery = `
-                SELECT 
-                    TO_CHAR(r.regatta_date, 'YYYY-MM-DD') as race_date,
-                    r.regatta_name,
-                    r.category,
-                    s.name as skipper_name,
-                    s.yacht_club,
-                    res.position,
-                    res.total_points
-                FROM results res
-                JOIN races r ON res.race_id = r.id
-                JOIN skippers s ON res.skipper_id = s.id
-                WHERE 1=1
-            `;
+    // Add conditions using parameterized queries
+    if (values.sailorName) {
+        params.push(`%${values.sailorName}%`);
+        conditions.push(`LOWER(s.name) LIKE LOWER($${params.length})`);
     }
 
-    // Add conditions
-    if (analysis.sailorName) {
-        params.push(`%${analysis.sailorName}%`);
-        baseQuery += `\nAND LOWER(s.name) LIKE LOWER($${paramCount++})`;
+    if (values.yachtClub) {
+        params.push(`%${values.yachtClub}%`);
+        conditions.push(`LOWER(s.yacht_club) LIKE LOWER($${params.length})`);
     }
 
-    if (analysis.yachtClub) {
-        params.push(`%${analysis.yachtClub}%`);
-        baseQuery += `\nAND LOWER(s.yacht_club) LIKE LOWER($${paramCount++})`;
+    if (values.position) {
+        params.push(values.position);
+        conditions.push(`res.position <= $${params.length}`);
     }
 
-    if (analysis.position) {
-        const pos = parseInt(analysis.position);
-        if (!isNaN(pos)) {
-            baseQuery += `\nAND res.position <= ${pos}`;
-        }
+    if (values.regattaName) {
+        params.push(`%${values.regattaName}%`);
+        conditions.push(`LOWER(r.regatta_name) LIKE LOWER($${params.length})`);
     }
 
-    if (analysis.regattaName) {
-        params.push(`%${analysis.regattaName}%`);
-        baseQuery += `\nAND LOWER(r.regatta_name) LIKE LOWER($${paramCount++})`;
+    if (values.location) {
+        params.push(`%${values.location}%`);
+        conditions.push(`LOWER(r.regatta_name) LIKE LOWER($${params.length})`);
     }
 
-    if (analysis.location) {
-        params.push(`%${analysis.location}%`);
-        baseQuery += `\nAND LOWER(r.regatta_name) LIKE LOWER($${paramCount++})`;
-    }
-
-    if (analysis.year) {
-        baseQuery += `\nAND EXTRACT(YEAR FROM races.regatta_date) = ${analysis.year}`;
+    if (values.year) {
+        params.push(values.year);
+        conditions.push(`EXTRACT(YEAR FROM races.regatta_date) = $${params.length}`);
     } else if (analysis.timeFrame === 'this_year') {
-        baseQuery += `\nAND EXTRACT(YEAR FROM races.regatta_date) = EXTRACT(YEAR FROM CURRENT_DATE)`;
+        conditions.push(`EXTRACT(YEAR FROM races.regatta_date) = EXTRACT(YEAR FROM CURRENT_DATE)`);
     }
 
+    // Use parameterized query for position checks
     if (analysis.queryType === "winner") {
-        baseQuery += `\nAND res.position = 1`;
+        conditions.push(`res.position = 1`);
     }
 
-    // Add appropriate ordering only for specific query types
-    switch (analysis.queryType) {
-        case "most_wins":
-            baseQuery += '\nGROUP BY skippers.name, skippers.yacht_club';
-            baseQuery += '\nORDER BY wins DESC';
-            break;
-        case "winners_list":
-            baseQuery += '\nORDER BY races.regatta_date DESC';
-            break;
-        case "sailor_search":
-            baseQuery += '\nORDER BY s.name ASC';
-            break;
-        case "team_results":
-            baseQuery += '\nORDER BY races.regatta_date DESC, results.position ASC';
-            break;
-        // Don't add default ORDER BY
+    // Add conditions safely
+    if (conditions.length > 0) {
+        baseQuery += `\nAND ${conditions.join('\nAND ')}`;
+    }
+
+    // Add safe ordering
+    const safeOrderBy = {
+        "most_wins": "wins DESC",
+        "winners_list": "races.regatta_date DESC",
+        "sailor_search": "s.name ASC",
+        "team_results": "races.regatta_date DESC, results.position ASC"
+    };
+
+    if (safeOrderBy[analysis.queryType]) {
+        baseQuery += `\nORDER BY ${safeOrderBy[analysis.queryType]}`;
     }
 
     return { query: baseQuery, params };
@@ -476,6 +329,82 @@ async function safetyCheck() {
     }
 }
 
+// Update bulkInsertData to use parameterized queries
+async function bulkInsertData(rows) {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        // Validate and clean data
+        const cleanRows = rows.map(row => ({
+            skipper: validateInput(row.Skipper),
+            yachtClub: validateInput(row.Yacht_Club),
+            regattaName: validateInput(row.Regatta_Name),
+            category: validateInput(row.Category),
+            boatName: validateInput(row.Boat_Name),
+            sailNumber: validateInput(row.Sail_Number),
+            position: validateInput(row.Position, 'position'),
+            totalPoints: row.Total_Points ? parseFloat(row.Total_Points) : null
+        }));
+
+        // Use parameterized queries for bulk inserts
+        const skipperQuery = `
+            INSERT INTO skippers (name, yacht_club) 
+            SELECT v.name, v.yacht_club
+            FROM unnest($1::text[], $2::text[]) AS v(name, yacht_club)
+            ON CONFLICT (name) DO UPDATE 
+            SET yacht_club = EXCLUDED.yacht_club
+            RETURNING id, name`;
+
+        // 2. Bulk insert races
+        const raceQuery = `
+            INSERT INTO races (regatta_name, regatta_date, category, boat_name, sail_number)
+            SELECT * FROM UNNEST($1::text[], $2::date[], $3::text[], $4::text[], $5::text[])
+            RETURNING id, regatta_name, regatta_date`;
+
+        // 3. Bulk insert results
+        const resultQuery = `
+            INSERT INTO results (race_id, skipper_id, position, total_points)
+            SELECT * FROM UNNEST($1::int[], $2::int[], $3::int[], $4::decimal[])`;
+
+        // Execute queries
+        const skipperResult = await client.query(skipperQuery, [
+            cleanRows.map(r => r.skipper),
+            cleanRows.map(r => r.yachtClub)
+        ]);
+        const skipperMap = new Map(skipperResult.rows.map(r => [r.name, r.id]));
+
+        const raceResult = await client.query(
+            raceQuery,
+            [
+                cleanRows.map(r => r.regattaName),
+                cleanRows.map(r => new Date(r.regatta_date)),
+                cleanRows.map(r => r.category),
+                cleanRows.map(r => r.boatName),
+                cleanRows.map(r => r.sailNumber)
+            ]
+        );
+
+        await client.query(
+            resultQuery,
+            [
+                raceResult.rows.map(r => r.id),
+                cleanRows.map(r => skipperMap.get(r.skipper)),
+                cleanRows.map(r => r.position),
+                cleanRows.map(r => r.totalPoints)
+            ]
+        );
+
+        await client.query('COMMIT');
+        return rows.length;
+    } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+    } finally {
+        client.release();
+    }
+}
+
 // Define routes in correct order
 // 1. API routes
 app.get('/api/status', (req, res) => {
@@ -566,19 +495,10 @@ app.post('/upload', upload.single('file'), async (req, res) => {
             .pipe(parse({
                 columns: true,
                 skip_empty_lines: true,
-                trim: true // Add trim to handle whitespace
+                trim: true
             }))
             .on('data', (data) => {
-                // Log the raw data structure
-                console.log('CSV Row:', JSON.stringify(data));
                 results.push(data);
-            })
-            .on('error', (error) => {
-                console.error('CSV Parse Error:', error);
-                res.status(500).json({ 
-                    error: 'CSV parsing failed',
-                    details: error.message
-                });
             })
             .on('end', async () => {
                 console.log(`Parsed ${results.length} rows from CSV`);
@@ -588,140 +508,51 @@ app.post('/upload', upload.single('file'), async (req, res) => {
                         throw new Error('CSV file is empty');
                     }
 
-                    // Check required columns
-                    const requiredColumns = ['Regatta_Name', 'Regatta_Date', 'Skipper'];
-                    const missingColumns = requiredColumns.filter(col => !(col in results[0]));
-                    if (missingColumns.length > 0) {
-                        throw new Error(`Missing required columns: ${missingColumns.join(', ')}`);
-                    }
-
+                    // Validate required columns and data
                     for (const row of results) {
-                        console.log('Processing row:', {
-                            regatta: row.Regatta_Name,
-                            date: row.Regatta_Date,
-                            skipper: row.Skipper,
-                            yacht_club: row.Yacht_Club,
-                            position: row.Position,
-                            points: row.Total_Points
-                        });
+                        if (!row.Regatta_Name?.trim()) throw new Error(`Missing Regatta Name in row`);
+                        if (!row.Skipper?.trim()) throw new Error(`Missing Skipper in row`);
+                        if (!row.Regatta_Date?.trim()) throw new Error(`Missing Date in row`);
 
-                        try {
-                            // Validate required fields
-                            if (!row.Regatta_Name?.trim()) {
-                                throw new Error('Regatta name is required');
-                            }
-                            if (!row.Skipper?.trim()) {
-                                throw new Error('Skipper name is required');
-                            }
-                            if (!row.Regatta_Date?.trim()) {
-                                throw new Error('Regatta date is required');
-                            }
-
-                            // Validate and parse date
-                            let parsedDate;
-                            try {
-                                // Try different date formats
-                                const dateStr = row.Regatta_Date.trim();
-                                if (dateStr.includes('/')) {
-                                    // Handle MM/DD/YYYY format
-                                    const [month, day, year] = dateStr.split('/');
-                                    parsedDate = new Date(year, month - 1, day);
-                                } else if (dateStr.includes('-')) {
-                                    // Handle YYYY-MM-DD format
-                                    parsedDate = new Date(dateStr);
-                                } else if (dateStr.match(/[A-Za-z]+/)) {
-                                    // Handle written month format (e.g., "February 15, 2025")
-                                    parsedDate = new Date(dateStr);
-                                    
-                                    // Verify the parsed date is valid
-                                    if (isNaN(parsedDate.getTime())) {
-                                        // Try alternative parsing for "Month DD, YYYY" format
-                                        const match = dateStr.match(/([A-Za-z]+)\s+(\d+),?\s+(\d{4})/);
-                                        if (match) {
-                                            const [_, month, day, year] = match;
-                                            parsedDate = new Date(`${month} ${day}, ${year}`);
-                                        }
-                                    }
-                                } else {
-                                    throw new Error('Unrecognized date format');
-                                }
-
-                                if (isNaN(parsedDate.getTime())) {
-                                    throw new Error('Invalid date');
-                                }
-                            } catch (dateError) {
-                                throw new Error(`Invalid date format for "${row.Regatta_Date}". Supported formats: MM/DD/YYYY, YYYY-MM-DD, or Month DD, YYYY`);
-                            }
-
-                            // First, ensure the skipper exists
-                            const skipperResult = await pool.query(
-                                'INSERT INTO skippers (name, yacht_club) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET yacht_club = EXCLUDED.yacht_club RETURNING id',
-                                [
-                                    row.Skipper.trim(),
-                                    row.Yacht_Club ? row.Yacht_Club.trim() : null
-                                ]
-                            );
-                            const skipperId = skipperResult.rows[0].id;
-                            console.log('Skipper processed:', skipperId);
-
-                            // Then, create the race entry
-                            const raceResult = await pool.query(
-                                'INSERT INTO races (regatta_name, regatta_date, category, boat_name, sail_number) VALUES ($1, $2, $3, $4, $5) RETURNING id',
-                                [
-                                    row.Regatta_Name.trim(),
-                                    parsedDate.toISOString(),
-                                    row.Category ? row.Category.trim() : null,
-                                    row.Boat_Name ? row.Boat_Name.trim() : null,
-                                    row.Sail_Number ? row.Sail_Number.trim() : null
-                                ]
-                            );
-                            const raceId = raceResult.rows[0].id;
-                            console.log('Race processed:', raceId);
-
-                            // Handle numeric values
-                            let position = null;
-                            if (row.Position) {
-                                position = parseInt(row.Position.toString().trim());
-                                if (isNaN(position)) {
-                                    throw new Error(`Invalid position value: ${row.Position}`);
+                        // Validate date
+                        const dateStr = row.Regatta_Date.trim();
+                        let parsedDate;
+                        if (dateStr.includes('/')) {
+                            const [month, day, year] = dateStr.split('/');
+                            parsedDate = new Date(year, month - 1, day);
+                        } else if (dateStr.includes('-')) {
+                            parsedDate = new Date(dateStr);
+                        } else if (dateStr.match(/[A-Za-z]+/)) {
+                            parsedDate = new Date(dateStr);
+                            if (isNaN(parsedDate.getTime())) {
+                                const match = dateStr.match(/([A-Za-z]+)\s+(\d+),?\s+(\d{4})/);
+                                if (match) {
+                                    const [_, month, day, year] = match;
+                                    parsedDate = new Date(`${month} ${day}, ${year}`);
                                 }
                             }
-
-                            let totalPoints = null;
-                            if (row.Total_Points) {
-                                totalPoints = parseFloat(row.Total_Points.toString().trim());
-                                if (isNaN(totalPoints)) {
-                                    throw new Error(`Invalid points value: ${row.Total_Points}`);
-                                }
-                            }
-
-                            // Store the result
-                            await pool.query(
-                                'INSERT INTO results (race_id, skipper_id, position, total_points) VALUES ($1, $2, $3, $4)',
-                                [raceId, skipperId, position, totalPoints]
-                            );
-                            console.log('Result stored successfully');
-
-                        } catch (rowError) {
-                            console.error('Error processing row:', rowError);
-                            throw new Error(`Row ${results.indexOf(row) + 2}: ${rowError.message} (Skipper: ${row.Skipper}, Regatta: ${row.Regatta_Name})`);
+                        }
+                        if (isNaN(parsedDate?.getTime())) {
+                            throw new Error(`Invalid date format: ${dateStr}`);
                         }
                     }
 
-                    // Clean up uploaded file
+                    // Bulk insert all data
+                    const rowsInserted = await bulkInsertData(results);
+
+                    // Clean up
                     fs.unlinkSync(req.file.path);
                     console.log('Upload completed successfully');
 
                     res.json({
                         message: 'Regatta results successfully imported',
-                        rowsImported: results.length
+                        rowsImported: rowsInserted
                     });
                 } catch (error) {
-                    console.error('Detailed upload error:', error);
+                    console.error('Upload error:', error);
                     res.status(500).json({ 
-                        error: 'Database operation failed',
-                        details: error.message,
-                        stack: error.stack
+                        error: 'Upload failed',
+                        details: error.message
                     });
                 }
             });
