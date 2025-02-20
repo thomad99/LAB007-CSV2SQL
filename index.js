@@ -162,22 +162,18 @@ app.post('/upload', upload.single('file'), async (req, res) => {
 });
 
 // 3. Page routes in specific order
-app.get('/chat', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'chat.html'));
-});
-
 app.get('/upload', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// 4. Root route
+// 4. Root route (serve chat page by default)
 app.get('/', (req, res) => {
-    res.redirect('/chat');
+    res.sendFile(path.join(__dirname, 'public', 'chat.html'));
 });
 
 // 5. Move catch-all route to the very end
 app.get('*', (req, res) => {
-    res.redirect('/'); // Redirect unknown routes to home
+    res.redirect('/');
 });
 
 // Start server
