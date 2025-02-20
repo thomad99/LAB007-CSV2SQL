@@ -27,6 +27,11 @@ const openai = new OpenAI({
 // Function to analyze query using GPT
 async function analyzeQuery(query) {
     try {
+        if (!process.env.OPENAI_API_KEY) {
+            console.error('OpenAI API key is not set');
+            throw new Error('OpenAI API key is not configured');
+        }
+
         const completion = await openai.chat.completions.create({
             model: "gpt-3.5-turbo",
             messages: [
@@ -51,7 +56,7 @@ async function analyzeQuery(query) {
         return JSON.parse(completion.choices[0].message.content);
     } catch (error) {
         console.error('GPT Analysis error:', error);
-        return null;
+        throw error; // Propagate the error with details
     }
 }
 
@@ -104,6 +109,11 @@ app.post('/api/chat', async (req, res) => {
     const { query } = req.body;
     
     try {
+        // Verify OpenAI configuration
+        if (!process.env.OPENAI_API_KEY) {
+            throw new Error('OpenAI API key is not configured');
+        }
+
         // Analyze query using GPT
         const analysis = await analyzeQuery(query);
         console.log('GPT Analysis:', analysis);
@@ -141,7 +151,10 @@ app.post('/api/chat', async (req, res) => {
 
     } catch (error) {
         console.error('Chat query error:', error);
-        res.status(500).json({ error: 'Failed to process your question' });
+        res.status(500).json({ 
+            error: 'Failed to process your question',
+            details: error.message 
+        });
     }
 });
 
