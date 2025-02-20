@@ -204,6 +204,8 @@ function generateSQL(analysis) {
                 LEFT JOIN results res ON s.id = res.skipper_id
                 LEFT JOIN races r ON res.race_id = r.id
                 WHERE 1=1
+                GROUP BY s.id, s.name, s.yacht_club
+                ORDER BY s.name ASC
             `;
             break;
 
