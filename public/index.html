@@ -7,7 +7,22 @@
     <style>
         body {
             font-family: Arial, sans-serif;
-            max-width: 800px;
+            margin: 0;
+            padding: 0;
+            background-color: #e6f3ff;
+            background-image: url('pattern.png');
+            background-repeat: repeat;
+        }
+        .logo-container {
+            text-align: center;
+            padding: 20px 0;
+        }
+        .logo {
+            max-width: 300px;
+            height: auto;
+        }
+        .container {
+            max-width: 600px;
             margin: 0 auto;
             padding: 20px;
         }
@@ -59,22 +74,27 @@
     </style>
 </head>
 <body>
-    <h1>CSV to PostgreSQL Uploader</h1>
-    <div class="upload-container">
-        <form id="uploadForm">
-            <div class="form-group">
-                <label for="csvFile">Select CSV File:</label>
-                <input type="file" id="csvFile" name="file" accept=".csv" required>
-            </div>
-            <div class="form-group">
-                <label for="tableName">Table Name:</label>
-                <input type="text" id="tableName" name="tableName" placeholder="Enter table name (optional)">
-            </div>
-            <button type="submit">Upload and Import</button>
-        </form>
+    <div class="container">
+        <div class="logo-container">
+            <img src="LOGO BLUE.JPEG" alt="LoveSailing.AI Logo" class="logo">
+        </div>
+        <h1>CSV to PostgreSQL Uploader</h1>
+        <div class="upload-container">
+            <form id="uploadForm">
+                <div class="form-group">
+                    <label for="csvFile">Select CSV File:</label>
+                    <input type="file" id="csvFile" name="file" accept=".csv" required>
+                </div>
+                <div class="form-group">
+                    <label for="tableName">Table Name:</label>
+                    <input type="text" id="tableName" name="tableName" placeholder="Enter table name (optional)">
+                </div>
+                <button type="submit">Upload and Import</button>
+            </form>
+        </div>
+        <div id="status" class="status"></div>
+        <div id="debugWindow" class="debug-window"></div>
     </div>
-    <div id="status" class="status"></div>
-    <div id="debugWindow" class="debug-window"></div>
 
     <script>
         const form = document.getElementById('uploadForm');
