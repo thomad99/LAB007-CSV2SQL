@@ -143,11 +143,21 @@ function generateSQL(analysis) {
 
         case "regatta_count":
             baseQuery = `
+                WITH regatta_info AS (
+                    SELECT DISTINCT
+                        regatta_name,
+                        regatta_date,
+                        COUNT(DISTINCT results.skipper_id) as participants
+                    FROM races
+                    LEFT JOIN results ON races.id = results.race_id
+                    GROUP BY regatta_name, regatta_date
+                )
                 SELECT 
-                    COUNT(DISTINCT regatta_name) as regatta_count,
-                    array_agg(DISTINCT regatta_name) as regatta_list
-                FROM races
-                WHERE 1=1
+                    COUNT(*) as regatta_count,
+                    array_agg(regatta_name ORDER BY regatta_date DESC) as regatta_list,
+                    MIN(regatta_date) as earliest_date,
+                    MAX(regatta_date) as latest_date
+                FROM regatta_info
             `;
             break;
 
@@ -312,7 +322,7 @@ function generateSQL(analysis) {
         baseQuery += `\nAND res.position = 1`;
     }
 
-    // Add appropriate ordering
+    // Add appropriate ordering only for specific query types
     switch (analysis.queryType) {
         case "most_wins":
             baseQuery += '\nGROUP BY skippers.name, skippers.yacht_club';
@@ -321,8 +331,13 @@ function generateSQL(analysis) {
         case "winners_list":
             baseQuery += '\nORDER BY races.regatta_date DESC';
             break;
-        default:
+        case "sailor_search":
+            baseQuery += '\nORDER BY s.name ASC';
+            break;
+        case "team_results":
             baseQuery += '\nORDER BY races.regatta_date DESC, results.position ASC';
+            break;
+        // Don't add default ORDER BY
     }
 
     return { query: baseQuery, params };
@@ -484,130 +499,4 @@ app.post('/api/chat', async (req, res) => {
             const sailor = result.rows[0].sailor_name;
             const races = result.rows.length;
             const avgPosition = (result.rows.reduce((sum, row) => sum + parseInt(row.position), 0) / races).toFixed(1);
-            message = `Found ${races} races for ${sailor}. Average position: ${avgPosition}`;
-        }
-
-        // After executing the query, log the SQL and results
-        console.log('Executing SQL:', sqlQuery);
-        console.log('With parameters:', params);
-        console.log('Query results:', result.rows.length, 'rows found');
-
-        res.json({
-            message,
-            data: result.rows
-        });
-
-    } catch (error) {
-        console.error('Detailed chat error:', error);
-        res.status(500).json({ 
-            error: 'Failed to process your question',
-            details: error.message,
-            stack: error.stack
-        });
-    }
-});
-
-// 2. File upload route
-app.post('/upload', upload.single('file'), async (req, res) => {
-    if (!req.file) {
-        return res.status(400).json({ error: 'No file uploaded' });
-    }
-
-    console.log('Starting file upload process');
-    try {
-        const results = [];
-        fs.createReadStream(req.file.path)
-            .pipe(parse({
-                columns: true,
-                skip_empty_lines: true
-            }))
-            .on('data', (data) => {
-                console.log('Parsed row:', data);
-                results.push(data);
-            })
-            .on('end', async () => {
-                console.log(`Parsed ${results.length} rows from CSV`);
-                try {
-                    for (const row of results) {
-                        // Log each row being processed
-                        console.log('Processing row:', {
-                            regatta: row.Regatta_Name,
-                            date: row.Regatta_Date,
-                            skipper: row.Skipper
-                        });
-
-                        // First, ensure the skipper exists
-                        const skipperResult = await pool.query(
-                            'INSERT INTO skippers (name, yacht_club) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET yacht_club = EXCLUDED.yacht_club RETURNING id',
-                            [row.Skipper || null, row.Yacht_Club || null]
-                        );
-                        const skipperId = skipperResult.rows[0].id;
-
-                        // Then, create the race entry
-                        const raceResult = await pool.query(
-                            'INSERT INTO races (regatta_name, regatta_date, category, boat_name, sail_number) VALUES ($1, $2, $3, $4, $5) RETURNING id',
-                            [
-                                row.Regatta_Name || null,
-                                row.Regatta_Date || null,
-                                row.Category || null,
-                                row.Boat_Name || null,
-                                row.Sail_Number || null
-                            ]
-                        );
-                        const raceId = raceResult.rows[0].id;
-
-                        // Handle empty numeric values
-                        const position = row.Position ? parseInt(row.Position) : null;
-                        const totalPoints = row.Total_Points ? parseFloat(row.Total_Points) : null;
-
-                        // Finally, store the result
-                        await pool.query(
-                            'INSERT INTO results (race_id, skipper_id, position, total_points) VALUES ($1, $2, $3, $4)',
-                            [raceId, skipperId, position, totalPoints]
-                        );
-                    }
-                    console.log('Upload completed successfully');
-                    res.json({
-                        message: 'Regatta results successfully imported',
-                        rowsImported: results.length
-                    });
-                } catch (error) {
-                    console.error('Detailed upload error:', error);
-                    res.status(500).json({ 
-                        error: 'Database operation failed',
-                        details: error.message,
-                        stack: error.stack
-                    });
-                }
-            });
-    } catch (error) {
-        console.error('File processing error:', error);
-        res.status(500).json({ error: 'File processing failed' });
-    }
-});
-
-// 3. Page routes in specific order
-app.get('/upload', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
-// 4. Root route (serve chat page by default)
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'chat.html'));
-});
-
-// 5. Move catch-all route to the very end
-app.get('*', (req, res) => {
-    res.redirect('/');
-});
-
-// Call this function when the server starts
-app.listen(port, async () => {
-    try {
-        await initializeDatabase();
-        console.log(`CSV2POSTGRES Service is running on port ${port}`);
-    } catch (error) {
-        console.error('Failed to start server:', error);
-        process.exit(1);
-    }
-}); 
+            message = `Found ${races} races for ${sailor}. Average position: ${avgPosition}`
