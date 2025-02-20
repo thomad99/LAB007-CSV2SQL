@@ -604,17 +604,45 @@ app.post('/upload', upload.single('file'), async (req, res) => {
                         });
 
                         try {
-                            // Validate date format
-                            const parsedDate = new Date(row.Regatta_Date);
-                            if (isNaN(parsedDate.getTime())) {
-                                throw new Error(`Invalid date format: ${row.Regatta_Date}`);
+                            // Validate required fields
+                            if (!row.Regatta_Name?.trim()) {
+                                throw new Error('Regatta name is required');
+                            }
+                            if (!row.Skipper?.trim()) {
+                                throw new Error('Skipper name is required');
+                            }
+                            if (!row.Regatta_Date?.trim()) {
+                                throw new Error('Regatta date is required');
+                            }
+
+                            // Validate and parse date
+                            let parsedDate;
+                            try {
+                                // Try different date formats
+                                const dateStr = row.Regatta_Date.trim();
+                                if (dateStr.includes('/')) {
+                                    // Handle MM/DD/YYYY format
+                                    const [month, day, year] = dateStr.split('/');
+                                    parsedDate = new Date(year, month - 1, day);
+                                } else if (dateStr.includes('-')) {
+                                    // Handle YYYY-MM-DD format
+                                    parsedDate = new Date(dateStr);
+                                } else {
+                                    throw new Error('Unrecognized date format');
+                                }
+
+                                if (isNaN(parsedDate.getTime())) {
+                                    throw new Error('Invalid date');
+                                }
+                            } catch (dateError) {
+                                throw new Error(`Invalid date format for "${row.Regatta_Date}". Expected MM/DD/YYYY or YYYY-MM-DD`);
                             }
 
                             // First, ensure the skipper exists
                             const skipperResult = await pool.query(
                                 'INSERT INTO skippers (name, yacht_club) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET yacht_club = EXCLUDED.yacht_club RETURNING id',
                                 [
-                                    row.Skipper ? row.Skipper.trim() : null,
+                                    row.Skipper.trim(),
                                     row.Yacht_Club ? row.Yacht_Club.trim() : null
                                 ]
                             );
@@ -625,8 +653,8 @@ app.post('/upload', upload.single('file'), async (req, res) => {
                             const raceResult = await pool.query(
                                 'INSERT INTO races (regatta_name, regatta_date, category, boat_name, sail_number) VALUES ($1, $2, $3, $4, $5) RETURNING id',
                                 [
-                                    row.Regatta_Name ? row.Regatta_Name.trim() : null,
-                                    row.Regatta_Date ? row.Regatta_Date.trim() : null,
+                                    row.Regatta_Name.trim(),
+                                    parsedDate.toISOString(),
                                     row.Category ? row.Category.trim() : null,
                                     row.Boat_Name ? row.Boat_Name.trim() : null,
                                     row.Sail_Number ? row.Sail_Number.trim() : null
@@ -635,11 +663,24 @@ app.post('/upload', upload.single('file'), async (req, res) => {
                             const raceId = raceResult.rows[0].id;
                             console.log('Race processed:', raceId);
 
-                            // Handle empty numeric values
-                            const position = row.Position ? parseInt(row.Position.toString().trim()) : null;
-                            const totalPoints = row.Total_Points ? parseFloat(row.Total_Points.toString().trim()) : null;
+                            // Handle numeric values
+                            let position = null;
+                            if (row.Position) {
+                                position = parseInt(row.Position.toString().trim());
+                                if (isNaN(position)) {
+                                    throw new Error(`Invalid position value: ${row.Position}`);
+                                }
+                            }
 
-                            // Finally, store the result
+                            let totalPoints = null;
+                            if (row.Total_Points) {
+                                totalPoints = parseFloat(row.Total_Points.toString().trim());
+                                if (isNaN(totalPoints)) {
+                                    throw new Error(`Invalid points value: ${row.Total_Points}`);
+                                }
+                            }
+
+                            // Store the result
                             await pool.query(
                                 'INSERT INTO results (race_id, skipper_id, position, total_points) VALUES ($1, $2, $3, $4)',
                                 [raceId, skipperId, position, totalPoints]
@@ -648,7 +689,7 @@ app.post('/upload', upload.single('file'), async (req, res) => {
 
                         } catch (rowError) {
                             console.error('Error processing row:', rowError);
-                            throw new Error(`Error processing row for ${row.Skipper}: ${rowError.message}`);
+                            throw new Error(`Row ${results.indexOf(row) + 2}: ${rowError.message} (Skipper: ${row.Skipper}, Regatta: ${row.Regatta_Name})`);
                         }
                     }
 
