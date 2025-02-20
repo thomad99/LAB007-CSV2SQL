@@ -629,6 +629,19 @@ app.post('/upload', upload.single('file'), async (req, res) => {
                                 } else if (dateStr.includes('-')) {
                                     // Handle YYYY-MM-DD format
                                     parsedDate = new Date(dateStr);
+                                } else if (dateStr.match(/[A-Za-z]+/)) {
+                                    // Handle written month format (e.g., "February 15, 2025")
+                                    parsedDate = new Date(dateStr);
+                                    
+                                    // Verify the parsed date is valid
+                                    if (isNaN(parsedDate.getTime())) {
+                                        // Try alternative parsing for "Month DD, YYYY" format
+                                        const match = dateStr.match(/([A-Za-z]+)\s+(\d+),?\s+(\d{4})/);
+                                        if (match) {
+                                            const [_, month, day, year] = match;
+                                            parsedDate = new Date(`${month} ${day}, ${year}`);
+                                        }
+                                    }
                                 } else {
                                     throw new Error('Unrecognized date format');
                                 }
@@ -637,7 +650,7 @@ app.post('/upload', upload.single('file'), async (req, res) => {
                                     throw new Error('Invalid date');
                                 }
                             } catch (dateError) {
-                                throw new Error(`Invalid date format for "${row.Regatta_Date}". Expected MM/DD/YYYY or YYYY-MM-DD`);
+                                throw new Error(`Invalid date format for "${row.Regatta_Date}". Supported formats: MM/DD/YYYY, YYYY-MM-DD, or Month DD, YYYY`);
                             }
 
                             // First, ensure the skipper exists
