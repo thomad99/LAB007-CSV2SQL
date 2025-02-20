@@ -270,19 +270,19 @@ async function initializeDatabase() {
         await pool.query(`
             CREATE TABLE IF NOT EXISTS races (
                 id SERIAL PRIMARY KEY,
-                regatta_name VARCHAR(100),
+                regatta_name VARCHAR(500),
                 regatta_date DATE,
-                category VARCHAR(50),
-                boat_name VARCHAR(100),
-                sail_number VARCHAR(20),
+                category VARCHAR(255),
+                boat_name VARCHAR(500),
+                sail_number VARCHAR(100),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
             CREATE TABLE IF NOT EXISTS skippers (
                 id SERIAL PRIMARY KEY,
-                name VARCHAR(100) NOT NULL UNIQUE,
-                yacht_club VARCHAR(100),
+                name VARCHAR(500) NOT NULL UNIQUE,
+                yacht_club VARCHAR(500),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
