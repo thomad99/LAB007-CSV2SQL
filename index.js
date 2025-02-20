@@ -27,23 +27,31 @@ const openai = new OpenAI({
 // Function to analyze query using GPT
 async function analyzeQuery(query) {
     try {
-        if (!process.env.OPENAI_API_KEY) {
-            console.error('OpenAI API key is not set');
-            throw new Error('OpenAI API key is not configured');
-        }
-
         const completion = await openai.chat.completions.create({
             model: "gpt-3.5-turbo",
             messages: [
                 {
                     role: "system",
-                    content: `You are a SQL query analyzer. Extract information from natural language queries about sailing races and results.
+                    content: `You are a SQL query analyzer for a sailing database. Extract information from natural language queries.
                     Return JSON with these fields:
-                    - sailorName: the name of the sailor (if mentioned)
-                    - timeFrame: "this_year", "specific_date", or "all_time"
-                    - date: specific date if mentioned (YYYY-MM-DD format)
-                    - queryType: "race_results", "performance_summary", or "ranking"
-                    - additionalFilters: any other relevant filters mentioned`
+                    - queryType: one of:
+                        "winner" (for queries about who won a specific race)
+                        "winners_list" (for queries about multiple race winners)
+                        "most_wins" (for queries about who won the most)
+                        "sailor_results" (for race results of a sailor)
+                        "regatta_results" (for results of a specific regatta)
+                        "team_results" (for results by yacht club)
+                    - sailorName: the sailor's name if mentioned
+                    - regattaName: the regatta/race name if mentioned
+                    - yachtClub: the team/club name if mentioned
+                    - year: specific year if mentioned (YYYY format)
+                    - timeFrame: "this_year", "specific_year", or "all_time"
+                    Example queries:
+                    "Who won Sailfest 2024?" -> {"queryType": "winner", "regattaName": "Sailfest", "year": "2024"}
+                    "Show me the winners of all races in 2024" -> {"queryType": "winners_list", "year": "2024"}
+                    "who won the most races in 2023" -> {"queryType": "most_wins", "year": "2023"}
+                    "show me all race results for John in 2024" -> {"queryType": "sailor_results", "sailorName": "John", "year": "2024"}
+                    "What were the results from Sailfest?" -> {"queryType": "regatta_results", "regattaName": "Sailfest"}`
                 },
                 {
                     role: "user",
@@ -56,45 +64,98 @@ async function analyzeQuery(query) {
         return JSON.parse(completion.choices[0].message.content);
     } catch (error) {
         console.error('GPT Analysis error:', error);
-        throw error; // Propagate the error with details
+        throw error;
     }
 }
 
 // Function to generate SQL based on analysis
 function generateSQL(analysis) {
-    let baseQuery = `
-        SELECT 
-            TO_CHAR(races.regatta_date, 'YYYY-MM-DD') as race_date,
-            races.regatta_name,
-            races.category,
-            races.boat_name,
-            races.sail_number,
-            skippers.name as skipper_name,
-            skippers.yacht_club,
-            results.position,
-            results.total_points
-        FROM results
-        JOIN races ON results.race_id = races.id
-        JOIN skippers ON results.skipper_id = skippers.id
-        WHERE 1=1
-    `;
-
+    let baseQuery = '';
     const params = [];
     let paramCount = 1;
 
+    switch (analysis.queryType) {
+        case "most_wins":
+            baseQuery = `
+                SELECT 
+                    skippers.name as skipper_name,
+                    skippers.yacht_club,
+                    COUNT(*) as wins,
+                    array_agg(races.regatta_name) as races_won
+                FROM results
+                JOIN races ON results.race_id = races.id
+                JOIN skippers ON results.skipper_id = skippers.id
+                WHERE position = 1
+            `;
+            break;
+
+        case "winners_list":
+            baseQuery = `
+                SELECT 
+                    TO_CHAR(races.regatta_date, 'YYYY-MM-DD') as race_date,
+                    races.regatta_name,
+                    skippers.name as skipper_name,
+                    skippers.yacht_club,
+                    races.category
+                FROM results
+                JOIN races ON results.race_id = races.id
+                JOIN skippers ON results.skipper_id = skippers.id
+                WHERE position = 1
+            `;
+            break;
+
+        default:
+            baseQuery = `
+                SELECT 
+                    TO_CHAR(races.regatta_date, 'YYYY-MM-DD') as race_date,
+                    races.regatta_name,
+                    races.category,
+                    races.boat_name,
+                    races.sail_number,
+                    skippers.name as skipper_name,
+                    skippers.yacht_club,
+                    results.position,
+                    results.total_points
+                FROM results
+                JOIN races ON results.race_id = races.id
+                JOIN skippers ON results.skipper_id = skippers.id
+                WHERE 1=1
+            `;
+    }
+
+    // Add specific conditions based on analysis
     if (analysis.sailorName) {
         params.push(`%${analysis.sailorName}%`);
         baseQuery += `\nAND LOWER(skippers.name) LIKE LOWER($${paramCount++})`;
     }
 
-    if (analysis.timeFrame === 'this_year') {
-        baseQuery += `\nAND EXTRACT(YEAR FROM races.regatta_date) = EXTRACT(YEAR FROM CURRENT_DATE)`;
-    } else if (analysis.timeFrame === 'specific_date') {
-        params.push(analysis.date);
-        baseQuery += `\nAND races.regatta_date = $${paramCount++}`;
+    if (analysis.regattaName) {
+        params.push(`%${analysis.regattaName}%`);
+        baseQuery += `\nAND LOWER(races.regatta_name) LIKE LOWER($${paramCount++})`;
     }
 
-    baseQuery += '\nORDER BY races.regatta_date ASC';
+    if (analysis.year) {
+        baseQuery += `\nAND EXTRACT(YEAR FROM races.regatta_date) = ${analysis.year}`;
+    } else if (analysis.timeFrame === 'this_year') {
+        baseQuery += `\nAND EXTRACT(YEAR FROM races.regatta_date) = EXTRACT(YEAR FROM CURRENT_DATE)`;
+    }
+
+    if (analysis.queryType === "winner") {
+        baseQuery += `\nAND results.position = 1`;
+    }
+
+    // Add appropriate ordering
+    switch (analysis.queryType) {
+        case "most_wins":
+            baseQuery += '\nGROUP BY skippers.name, skippers.yacht_club';
+            baseQuery += '\nORDER BY wins DESC';
+            break;
+        case "winners_list":
+            baseQuery += '\nORDER BY races.regatta_date DESC';
+            break;
+        default:
+            baseQuery += '\nORDER BY races.regatta_date DESC, results.position ASC';
+    }
 
     return { query: baseQuery, params };
 }
