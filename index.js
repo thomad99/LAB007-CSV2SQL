@@ -53,30 +53,49 @@ async function analyzeQuery(query) {
             messages: [
                 {
                     role: "system",
-                    content: `You are a SQL query analyzer for a sailing database. Extract information from natural language queries.
+                    content: `You are a PostgreSQL query analyzer for a sailing race results database. Extract information from natural language queries.
+                    Database schema:
+                    - races: regatta_name, regatta_date, category, boat_name, sail_number
+                    - skippers: name, yacht_club
+                    - results: position, total_points (links races to skippers)
+
                     Return JSON with these fields:
                     - queryType: one of:
-                        "winner" (for queries about race winners)
-                        "sailor_search" (for finding/listing sailors)
-                        "sailor_stats" (for sailor performance stats)
-                        "team_members" (for listing team members)
-                        "team_results" (for team performance)
+                        "winner" (for who won specific races)
+                        "winners_list" (for listing multiple winners)
+                        "sailor_search" (for finding sailors by name/info)
+                        "sailor_stats" (for sailor performance/history)
+                        "team_members" (for listing yacht club members)
+                        "team_results" (for yacht club performance)
                         "regatta_count" (for counting/listing regattas)
                         "regatta_results" (for specific regatta results)
                         "location_races" (for races at a location)
                         "database_status" (for database stats/freshness)
-                        "performance_stats" (for rankings/performance analysis)
+                        "performance_stats" (for rankings/performance)
                     - sailorName: sailor's name if mentioned
                     - regattaName: regatta/event name if mentioned
                     - yachtClub: team/club name if mentioned
                     - location: race location if mentioned
-                    - year: specific year if mentioned (YYYY format)
-                    - position: specific position mentioned (e.g., "top 3", "first place")
+                    - year: specific year if mentioned
+                    - position: position mentioned (e.g., "top 3", "first")
                     - timeFrame: "this_year", "specific_year", "all_time", "recent"
-                    Example queries:
-                    "Show me all sailors in SYC" -> {"queryType": "team_members", "yachtClub": "SYC"}
-                    "Who has the most wins?" -> {"queryType": "performance_stats", "timeFrame": "all_time"}
-                    "Show me top 3 finishes for John" -> {"queryType": "sailor_stats", "sailorName": "John", "position": "3"}`
+
+                    Common question patterns:
+                    - "who won [regatta]" -> winner + regattaName
+                    - "show me results for [sailor]" -> sailor_stats + sailorName
+                    - "how many races in [location]" -> location_races + location
+                    - "show sailors from [club]" -> team_members + yachtClub
+                    - "what were the results of [regatta]" -> regatta_results + regattaName
+                    - "how did [sailor] do in [regatta]" -> sailor_stats + sailorName + regattaName
+                    - "who are the members of [club]" -> team_members + yachtClub
+                    - "show all results for [club]" -> team_results + yachtClub
+                    - "when was [regatta]" -> regatta_results + regattaName
+                    - "how up to date is the database" -> database_status
+                    - "list all sailors" -> sailor_search
+                    - "show me the winners from [year]" -> winners_list + year
+                    - "who has won the most races" -> performance_stats
+                    - "what regattas happened in [year]" -> regatta_count + year
+                    - "show me [sailor]'s best results" -> sailor_stats + sailorName + position`
                 },
                 {
                     role: "user",
