@@ -161,11 +161,10 @@ function generateSQL(analysis) {
     const params = [];
     const values = {};
 
-    // Set the base query based on query type
     switch (analysis.queryType) {
         case "sailor_search":
             baseQuery = `
-                SELECT DISTINCT
+                SELECT 
                     s.name,
                     s.yacht_club,
                     COUNT(DISTINCT r.id) as total_races,
@@ -179,7 +178,34 @@ function generateSQL(analysis) {
                 WHERE 1=1
             `;
             break;
-        // ... other cases ...
+
+        case "database_status":
+            return {
+                query: `
+                    SELECT 
+                        (SELECT COUNT(*) FROM skippers) as total_sailors,
+                        (SELECT COUNT(*) FROM races) as total_races,
+                        (SELECT COUNT(*) FROM results) as total_results,
+                        (SELECT MIN(regatta_date) FROM races) as earliest_race,
+                        (SELECT MAX(regatta_date) FROM races) as latest_race,
+                        (SELECT COUNT(DISTINCT yacht_club) FROM skippers WHERE yacht_club IS NOT NULL) as total_clubs
+                `,
+                params: []
+            };
+
+        case "regatta_count":
+            baseQuery = `
+                SELECT 
+                    regatta_name,
+                    regatta_date,
+                    category,
+                    COUNT(DISTINCT res.skipper_id) as participants
+                FROM races r
+                LEFT JOIN results res ON r.id = res.race_id
+                WHERE 1=1
+                GROUP BY r.id, regatta_name, regatta_date, category
+            `;
+            break;
     }
 
     // Validate inputs
@@ -476,57 +502,48 @@ app.get('/api/status', (req, res) => {
 });
 
 app.post('/api/chat', async (req, res) => {
-    console.log('Chat API called with query:', req.body.query);
-    
     try {
-        // First, verify data exists in the database
-        const tableCheck = await pool.query(`
-            SELECT 
-                (SELECT COUNT(*) FROM races) as race_count,
-                (SELECT COUNT(*) FROM skippers) as skipper_count,
-                (SELECT COUNT(*) FROM results) as result_count
-        `);
-        console.log('Database table counts:', tableCheck.rows[0]);
-
-        // Verify OpenAI configuration
-        if (!process.env.OPENAI_API_KEY) {
-            throw new Error('OpenAI API key is not configured');
-        }
-
-        // Analyze query using GPT
         const analysis = await analyzeQuery(req.body.query);
-        console.log('GPT Analysis:', analysis);
-
-        if (!analysis) {
-            return res.json({
-                message: "I'm having trouble understanding your question. Could you rephrase it?"
-            });
-        }
-
-        // Generate SQL based on analysis
         const { query: sqlQuery, params } = generateSQL(analysis);
-        console.log('Generated SQL:', sqlQuery);
-        console.log('Parameters:', params);
-
-        // Execute query
         const result = await pool.query(sqlQuery, params);
-        console.log('Raw query results:', result.rows);
 
-        // Generate response
-        let message = 'Here are the results for your query:';
-        if (result.rows.length === 0) {
-            message = 'No results found for your query.';
-        } else if (result.rows[0].sailor_name) {
-            const sailor = result.rows[0].sailor_name;
-            const races = result.rows.length;
-            const avgPosition = (result.rows.reduce((sum, row) => sum + parseInt(row.position), 0) / races).toFixed(1);
-            message = `Found ${races} races for ${sailor}. Average position: ${avgPosition}`;
+        let message = '';
+        switch (analysis.queryType) {
+            case "database_status":
+                const stats = result.rows[0];
+                message = `I know about ${stats.total_sailors} sailors from ${stats.total_clubs} yacht clubs. `;
+                message += `There are ${stats.total_races} races in the database, `;
+                message += `from ${new Date(stats.earliest_race).toLocaleDateString()} to ${new Date(stats.latest_race).toLocaleDateString()}.`;
+                break;
+
+            case "sailor_search":
+                if (result.rows.length === 0) {
+                    message = `I couldn't find any sailors matching "${values.sailorName}". Try a different name or partial name.`;
+                } else {
+                    message = `Found ${result.rows.length} sailor(s). `;
+                    if (result.rows.length === 1) {
+                        const sailor = result.rows[0];
+                        message += `${sailor.name} from ${sailor.yacht_club || 'unknown club'} `;
+                        message += `has competed in ${sailor.total_races} races with ${sailor.wins} wins. `;
+                        if (sailor.best_position) {
+                            message += `Best finish: ${sailor.best_position}${sailor.best_position === 1 ? 'st' : 'th'} place.`;
+                        }
+                    }
+                }
+                break;
+
+            case "regatta_count":
+                message = `Found ${result.rows.length} regattas. `;
+                if (values.year) {
+                    message = `Found ${result.rows.length} regattas in ${values.year}. `;
+                }
+                break;
+
+            default:
+                message = result.rows.length === 0 ? 
+                    'No results found for your query.' : 
+                    `Found ${result.rows.length} results.`;
         }
-
-        // After executing the query, log the SQL and results
-        console.log('Executing SQL:', sqlQuery);
-        console.log('With parameters:', params);
-        console.log('Query results:', result.rows.length, 'rows found');
 
         res.json({
             message,
@@ -534,11 +551,10 @@ app.post('/api/chat', async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Detailed chat error:', error);
+        console.error('Chat error:', error);
         res.status(500).json({ 
             error: 'Failed to process your question',
-            details: error.message,
-            stack: error.stack
+            details: error.message
         });
     }
 });
