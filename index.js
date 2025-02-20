@@ -20,7 +20,8 @@ const upload = multer({ dest: 'uploads/' });
 app.use(express.json());
 app.use(express.static('public')); // Serve static files from public directory
 
-// Routes
+// Define routes in correct order
+// 1. API routes
 app.get('/api/status', (req, res) => {
   res.json({
     message: 'Welcome to CSV2POSTGRES Service',
@@ -28,7 +29,83 @@ app.get('/api/status', (req, res) => {
   });
 });
 
-// Upload and process CSV route
+app.post('/api/chat', async (req, res) => {
+    const { query } = req.body;
+    
+    try {
+        const lowerQuery = query.toLowerCase();
+        let sqlQuery = '';
+        let params = [];
+
+        if (lowerQuery.includes('sailor') && lowerQuery.includes('race')) {
+            // Extract sailor name from query
+            const nameMatch = query.match(/sailor\s+([A-Za-z\s]+)(?=\s+(?:do|perform|race))/i);
+            if (nameMatch) {
+                const sailorName = nameMatch[1].trim();
+                
+                if (lowerQuery.includes('this year')) {
+                    sqlQuery = `
+                        SELECT 
+                            TO_CHAR(races.date, 'YYYY-MM-DD') as race_date,
+                            races.name as race_name,
+                            sailors.name as sailor_name,
+                            results.position,
+                            results.points
+                        FROM results
+                        JOIN races ON results.race_id = races.id
+                        JOIN sailors ON results.sailor_id = sailors.id
+                        WHERE LOWER(sailors.name) LIKE LOWER($1)
+                        AND EXTRACT(YEAR FROM races.date) = EXTRACT(YEAR FROM CURRENT_DATE)
+                        ORDER BY races.date ASC
+                    `;
+                } else {
+                    sqlQuery = `
+                        SELECT 
+                            TO_CHAR(races.date, 'YYYY-MM-DD') as race_date,
+                            races.name as race_name,
+                            sailors.name as sailor_name,
+                            results.position,
+                            results.points
+                        FROM results
+                        JOIN races ON results.race_id = races.id
+                        JOIN sailors ON results.sailor_id = sailors.id
+                        WHERE LOWER(sailors.name) LIKE LOWER($1)
+                        ORDER BY races.date ASC
+                    `;
+                }
+                params = [`%${sailorName}%`];
+            }
+        }
+
+        if (sqlQuery) {
+            const result = await pool.query(sqlQuery, params);
+            let message = 'Here are the results for your query:';
+            
+            if (result.rows.length === 0) {
+                message = 'No results found for your query.';
+            } else if (result.rows[0].sailor_name) {
+                const sailor = result.rows[0].sailor_name;
+                const races = result.rows.length;
+                const avgPosition = (result.rows.reduce((sum, row) => sum + parseInt(row.position), 0) / races).toFixed(1);
+                message = `Found ${races} races for ${sailor}. Average position: ${avgPosition}`;
+            }
+
+            res.json({
+                message,
+                data: result.rows
+            });
+        } else {
+            res.json({
+                message: "I'm not sure how to answer that question. Try asking about a sailor's race results."
+            });
+        }
+    } catch (error) {
+        console.error('Chat query error:', error);
+        res.status(500).json({ error: 'Failed to process your question' });
+    }
+});
+
+// 2. File upload route
 app.post('/upload', upload.single('file'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No file uploaded' });
@@ -84,63 +161,23 @@ app.post('/upload', upload.single('file'), async (req, res) => {
   }
 });
 
-// Chat endpoint
-app.post('/api/chat', async (req, res) => {
-    const { query } = req.body;
-    
-    try {
-        // Simple keyword-based query parsing
-        const lowerQuery = query.toLowerCase();
-        let sqlQuery = '';
-        let params = [];
-
-        if (lowerQuery.includes('sailor') && lowerQuery.includes('race')) {
-            // Extract sailor name from query
-            const nameMatch = query.match(/sailor\s+([A-Za-z\s]+)(?=\s+(?:do|perform|race))/i);
-            if (nameMatch) {
-                const sailorName = nameMatch[1].trim();
-                sqlQuery = `
-                    SELECT 
-                        races.date,
-                        races.name as race_name,
-                        sailors.name as sailor_name,
-                        results.position,
-                        results.points
-                    FROM results
-                    JOIN races ON results.race_id = races.id
-                    JOIN sailors ON results.sailor_id = sailors.id
-                    WHERE LOWER(sailors.name) LIKE LOWER($1)
-                    ORDER BY races.date DESC
-                `;
-                params = [`%${sailorName}%`];
-            }
-        }
-
-        if (sqlQuery) {
-            const result = await pool.query(sqlQuery, params);
-            res.json({
-                message: `Here are the results for your query:`,
-                data: result.rows
-            });
-        } else {
-            res.json({
-                message: "I'm not sure how to answer that question. Try asking about a sailor's race results."
-            });
-        }
-    } catch (error) {
-        console.error('Chat query error:', error);
-        res.status(500).json({ error: 'Failed to process your question' });
-    }
-});
-
-// Update the root route to serve the chat interface
-app.get('/', (req, res) => {
+// 3. Page routes in specific order
+app.get('/chat', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'chat.html'));
 });
 
-// Serve the HTML page for any other routes
+app.get('/upload', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// 4. Root route
+app.get('/', (req, res) => {
+    res.redirect('/chat');
+});
+
+// 5. Move catch-all route to the very end
 app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+    res.redirect('/'); // Redirect unknown routes to home
 });
 
 // Start server
