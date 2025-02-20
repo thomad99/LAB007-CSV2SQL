@@ -64,14 +64,18 @@ async function analyzeQuery(query) {
 function generateSQL(analysis) {
     let baseQuery = `
         SELECT 
-            TO_CHAR(races.date, 'YYYY-MM-DD') as race_date,
-            races.name as race_name,
-            sailors.name as sailor_name,
+            TO_CHAR(races.regatta_date, 'YYYY-MM-DD') as race_date,
+            races.regatta_name,
+            races.category,
+            races.boat_name,
+            races.sail_number,
+            skippers.name as skipper_name,
+            skippers.yacht_club,
             results.position,
-            results.points
+            results.total_points
         FROM results
         JOIN races ON results.race_id = races.id
-        JOIN sailors ON results.sailor_id = sailors.id
+        JOIN skippers ON results.skipper_id = skippers.id
         WHERE 1=1
     `;
 
@@ -80,19 +84,53 @@ function generateSQL(analysis) {
 
     if (analysis.sailorName) {
         params.push(`%${analysis.sailorName}%`);
-        baseQuery += `\nAND LOWER(sailors.name) LIKE LOWER($${paramCount++})`;
+        baseQuery += `\nAND LOWER(skippers.name) LIKE LOWER($${paramCount++})`;
     }
 
     if (analysis.timeFrame === 'this_year') {
-        baseQuery += `\nAND EXTRACT(YEAR FROM races.date) = EXTRACT(YEAR FROM CURRENT_DATE)`;
+        baseQuery += `\nAND EXTRACT(YEAR FROM races.regatta_date) = EXTRACT(YEAR FROM CURRENT_DATE)`;
     } else if (analysis.timeFrame === 'specific_date') {
         params.push(analysis.date);
-        baseQuery += `\nAND races.date = $${paramCount++}`;
+        baseQuery += `\nAND races.regatta_date = $${paramCount++}`;
     }
 
-    baseQuery += '\nORDER BY races.date ASC';
+    baseQuery += '\nORDER BY races.regatta_date ASC';
 
     return { query: baseQuery, params };
+}
+
+// Add this function to create tables if they don't exist
+async function initializeDatabase() {
+    try {
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS races (
+                id SERIAL PRIMARY KEY,
+                regatta_name VARCHAR(100) NOT NULL,
+                regatta_date DATE NOT NULL,
+                category VARCHAR(50),
+                boat_name VARCHAR(100),
+                sail_number VARCHAR(20)
+            );
+
+            CREATE TABLE IF NOT EXISTS skippers (
+                id SERIAL PRIMARY KEY,
+                name VARCHAR(100) NOT NULL,
+                yacht_club VARCHAR(100)
+            );
+
+            CREATE TABLE IF NOT EXISTS results (
+                id SERIAL PRIMARY KEY,
+                race_id INTEGER REFERENCES races(id),
+                skipper_id INTEGER REFERENCES skippers(id),
+                position INTEGER NOT NULL,
+                total_points DECIMAL(5,2)
+            );
+        `);
+        console.log('Database tables initialized successfully');
+    } catch (error) {
+        console.error('Database initialization error:', error);
+        throw error;
+    }
 }
 
 // Define routes in correct order
@@ -160,58 +198,64 @@ app.post('/api/chat', async (req, res) => {
 
 // 2. File upload route
 app.post('/upload', upload.single('file'), async (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: 'No file uploaded' });
-  }
+    if (!req.file) {
+        return res.status(400).json({ error: 'No file uploaded' });
+    }
 
-  try {
-    const results = [];
-    fs.createReadStream(req.file.path)
-      .pipe(parse({
-        columns: true,
-        skip_empty_lines: true
-      }))
-      .on('data', (data) => results.push(data))
-      .on('end', async () => {
-        try {
-          // Assuming first row contains column names
-          if (results.length > 0) {
-            const columns = Object.keys(results[0]);
-            const tableName = req.body.tableName || 'imported_data';
+    try {
+        const results = [];
+        fs.createReadStream(req.file.path)
+            .pipe(parse({
+                columns: true,
+                skip_empty_lines: true
+            }))
+            .on('data', (data) => results.push(data))
+            .on('end', async () => {
+                try {
+                    for (const row of results) {
+                        // First, ensure the skipper exists
+                        const skipperResult = await pool.query(
+                            'INSERT INTO skippers (name, yacht_club) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET yacht_club = EXCLUDED.yacht_club RETURNING id',
+                            [row.Skipper, row.Yacht_Club]
+                        );
+                        const skipperId = skipperResult.rows[0].id;
 
-            // Create table if not exists
-            const createTableQuery = `CREATE TABLE IF NOT EXISTS ${tableName} (
-              ${columns.map(col => `"${col}" TEXT`).join(', ')}
-            )`;
-            await pool.query(createTableQuery);
+                        // Then, create the race entry
+                        const raceResult = await pool.query(
+                            'INSERT INTO races (regatta_name, regatta_date, category, boat_name, sail_number) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+                            [
+                                row.Regatta_Name,
+                                row.Regatta_Date,
+                                row.Category,
+                                row.Boat_Name,
+                                row.Sail_Number
+                            ]
+                        );
+                        const raceId = raceResult.rows[0].id;
 
-            // Insert data
-            for (const row of results) {
-              const values = columns.map(col => row[col]);
-              const insertQuery = `
-                INSERT INTO ${tableName} (${columns.map(col => `"${col}"`).join(', ')})
-                VALUES (${columns.map((_, i) => `$${i + 1}`).join(', ')})
-              `;
-              await pool.query(insertQuery, values);
-            }
+                        // Finally, store the result
+                        await pool.query(
+                            'INSERT INTO results (race_id, skipper_id, position, total_points) VALUES ($1, $2, $3, $4)',
+                            [raceId, skipperId, row.Position, row.Total_Points]
+                        );
+                    }
 
-            // Clean up uploaded file
-            fs.unlinkSync(req.file.path);
+                    // Clean up uploaded file
+                    fs.unlinkSync(req.file.path);
 
-            res.json({
-              message: 'CSV data successfully imported to PostgreSQL',
-              rowsImported: results.length
+                    res.json({
+                        message: 'Regatta results successfully imported',
+                        rowsImported: results.length
+                    });
+                } catch (error) {
+                    console.error('Database error:', error);
+                    res.status(500).json({ error: 'Database operation failed' });
+                }
             });
-          }
-        } catch (error) {
-          console.error('Database error:', error);
-          res.status(500).json({ error: 'Database operation failed' });
-        }
-      });
-  } catch (error) {
-    console.error('File processing error:', error);
-    res.status(500).json({ error: 'File processing failed' });
-  }
+    } catch (error) {
+        console.error('File processing error:', error);
+        res.status(500).json({ error: 'File processing failed' });
+    }
 });
 
 // 3. Page routes in specific order
@@ -229,7 +273,13 @@ app.get('*', (req, res) => {
     res.redirect('/');
 });
 
-// Start server
-app.listen(port, () => {
-  console.log(`CSV2POSTGRES Service is running on port ${port}`);
+// Call this function when the server starts
+app.listen(port, async () => {
+    try {
+        await initializeDatabase();
+        console.log(`CSV2POSTGRES Service is running on port ${port}`);
+    } catch (error) {
+        console.error('Failed to start server:', error);
+        process.exit(1);
+    }
 }); 
