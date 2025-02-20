@@ -8,4 +8,6 @@ services:
       - key: DATABASE_URL
         sync: false
       - key: PORT
-        value: 3000 
+        value: 3000
+      - key: OPENAI_API_KEY
+        sync: false  # This means it will be set manually in Render dashboard 
