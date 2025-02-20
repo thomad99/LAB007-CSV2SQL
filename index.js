@@ -59,6 +59,16 @@ async function analyzeQuery(query) {
                     - skippers: name, yacht_club
                     - results: position, total_points (links races to skippers)
 
+                    Common sailor name patterns to detect:
+                    - "find sailor [name]" -> {"queryType": "sailor_search", "sailorName": "[name]"}
+                    - "search for [name]" -> {"queryType": "sailor_search", "sailorName": "[name]"}
+                    - "show me [name]'s results" -> {"queryType": "sailor_stats", "sailorName": "[name]"}
+                    - "any sailor called [name]" -> {"queryType": "sailor_search", "sailorName": "[name]"}
+                    - "sailor [name]" -> {"queryType": "sailor_search", "sailorName": "[name]"}
+                    - "find [name]" -> {"queryType": "sailor_search", "sailorName": "[name]"}
+                    
+                    Always extract partial names too, e.g., "find John" should set sailorName: "John"
+                    ...
                     Return JSON with these fields:
                     - queryType: one of:
                         "winner" (for who won specific races)
@@ -186,14 +196,14 @@ function generateSQL(analysis) {
                     s.name,
                     s.yacht_club,
                     COUNT(DISTINCT r.id) as total_races,
+                    COUNT(DISTINCT CASE WHEN res.position = 1 THEN r.id END) as wins,
+                    MIN(res.position) as best_position,
                     MIN(r.regatta_date) as first_race,
                     MAX(r.regatta_date) as last_race
                 FROM skippers s
                 LEFT JOIN results res ON s.id = res.skipper_id
                 LEFT JOIN races r ON res.race_id = r.id
                 WHERE 1=1
-                GROUP BY s.id, s.name, s.yacht_club
-                ORDER BY s.name ASC
             `;
             break;
 
@@ -553,54 +563,99 @@ app.post('/upload', upload.single('file'), async (req, res) => {
         fs.createReadStream(req.file.path)
             .pipe(parse({
                 columns: true,
-                skip_empty_lines: true
+                skip_empty_lines: true,
+                trim: true // Add trim to handle whitespace
             }))
             .on('data', (data) => {
-                console.log('Parsed row:', data);
+                // Log the raw data structure
+                console.log('CSV Row:', JSON.stringify(data));
                 results.push(data);
+            })
+            .on('error', (error) => {
+                console.error('CSV Parse Error:', error);
+                res.status(500).json({ 
+                    error: 'CSV parsing failed',
+                    details: error.message
+                });
             })
             .on('end', async () => {
                 console.log(`Parsed ${results.length} rows from CSV`);
                 try {
+                    // Validate CSV structure
+                    if (results.length === 0) {
+                        throw new Error('CSV file is empty');
+                    }
+
+                    // Check required columns
+                    const requiredColumns = ['Regatta_Name', 'Regatta_Date', 'Skipper'];
+                    const missingColumns = requiredColumns.filter(col => !(col in results[0]));
+                    if (missingColumns.length > 0) {
+                        throw new Error(`Missing required columns: ${missingColumns.join(', ')}`);
+                    }
+
                     for (const row of results) {
-                        // Log each row being processed
                         console.log('Processing row:', {
                             regatta: row.Regatta_Name,
                             date: row.Regatta_Date,
-                            skipper: row.Skipper
+                            skipper: row.Skipper,
+                            yacht_club: row.Yacht_Club,
+                            position: row.Position,
+                            points: row.Total_Points
                         });
 
-                        // First, ensure the skipper exists
-                        const skipperResult = await pool.query(
-                            'INSERT INTO skippers (name, yacht_club) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET yacht_club = EXCLUDED.yacht_club RETURNING id',
-                            [row.Skipper || null, row.Yacht_Club || null]
-                        );
-                        const skipperId = skipperResult.rows[0].id;
+                        try {
+                            // Validate date format
+                            const parsedDate = new Date(row.Regatta_Date);
+                            if (isNaN(parsedDate.getTime())) {
+                                throw new Error(`Invalid date format: ${row.Regatta_Date}`);
+                            }
 
-                        // Then, create the race entry
-                        const raceResult = await pool.query(
-                            'INSERT INTO races (regatta_name, regatta_date, category, boat_name, sail_number) VALUES ($1, $2, $3, $4, $5) RETURNING id',
-                            [
-                                row.Regatta_Name || null,
-                                row.Regatta_Date || null,
-                                row.Category || null,
-                                row.Boat_Name || null,
-                                row.Sail_Number || null
-                            ]
-                        );
-                        const raceId = raceResult.rows[0].id;
+                            // First, ensure the skipper exists
+                            const skipperResult = await pool.query(
+                                'INSERT INTO skippers (name, yacht_club) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET yacht_club = EXCLUDED.yacht_club RETURNING id',
+                                [
+                                    row.Skipper ? row.Skipper.trim() : null,
+                                    row.Yacht_Club ? row.Yacht_Club.trim() : null
+                                ]
+                            );
+                            const skipperId = skipperResult.rows[0].id;
+                            console.log('Skipper processed:', skipperId);
 
-                        // Handle empty numeric values
-                        const position = row.Position ? parseInt(row.Position) : null;
-                        const totalPoints = row.Total_Points ? parseFloat(row.Total_Points) : null;
+                            // Then, create the race entry
+                            const raceResult = await pool.query(
+                                'INSERT INTO races (regatta_name, regatta_date, category, boat_name, sail_number) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+                                [
+                                    row.Regatta_Name ? row.Regatta_Name.trim() : null,
+                                    row.Regatta_Date ? row.Regatta_Date.trim() : null,
+                                    row.Category ? row.Category.trim() : null,
+                                    row.Boat_Name ? row.Boat_Name.trim() : null,
+                                    row.Sail_Number ? row.Sail_Number.trim() : null
+                                ]
+                            );
+                            const raceId = raceResult.rows[0].id;
+                            console.log('Race processed:', raceId);
 
-                        // Finally, store the result
-                        await pool.query(
-                            'INSERT INTO results (race_id, skipper_id, position, total_points) VALUES ($1, $2, $3, $4)',
-                            [raceId, skipperId, position, totalPoints]
-                        );
+                            // Handle empty numeric values
+                            const position = row.Position ? parseInt(row.Position.toString().trim()) : null;
+                            const totalPoints = row.Total_Points ? parseFloat(row.Total_Points.toString().trim()) : null;
+
+                            // Finally, store the result
+                            await pool.query(
+                                'INSERT INTO results (race_id, skipper_id, position, total_points) VALUES ($1, $2, $3, $4)',
+                                [raceId, skipperId, position, totalPoints]
+                            );
+                            console.log('Result stored successfully');
+
+                        } catch (rowError) {
+                            console.error('Error processing row:', rowError);
+                            throw new Error(`Error processing row for ${row.Skipper}: ${rowError.message}`);
+                        }
                     }
+
+                    // Clean up uploaded file
+                    fs.unlinkSync(req.file.path);
                     console.log('Upload completed successfully');
+
                     res.json({
                         message: 'Regatta results successfully imported',
                         rowsImported: results.length
@@ -616,7 +671,10 @@ app.post('/upload', upload.single('file'), async (req, res) => {
             });
     } catch (error) {
         console.error('File processing error:', error);
-        res.status(500).json({ error: 'File processing failed' });
+        res.status(500).json({ 
+            error: 'File processing failed',
+            details: error.message
+        });
     }
 });
 
