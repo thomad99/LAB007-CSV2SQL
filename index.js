@@ -161,6 +161,27 @@ function generateSQL(analysis) {
     const params = [];
     const values = {};
 
+    // Set the base query based on query type
+    switch (analysis.queryType) {
+        case "sailor_search":
+            baseQuery = `
+                SELECT DISTINCT
+                    s.name,
+                    s.yacht_club,
+                    COUNT(DISTINCT r.id) as total_races,
+                    COUNT(DISTINCT CASE WHEN res.position = 1 THEN r.id END) as wins,
+                    MIN(res.position) as best_position,
+                    MIN(r.regatta_date) as first_race,
+                    MAX(r.regatta_date) as last_race
+                FROM skippers s
+                LEFT JOIN results res ON s.id = res.skipper_id
+                LEFT JOIN races r ON res.race_id = r.id
+                WHERE 1=1
+            `;
+            break;
+        // ... other cases ...
+    }
+
     // Validate inputs
     values.sailorName = validateInput(analysis.sailorName);
     values.yachtClub = validateInput(analysis.yachtClub);
@@ -210,6 +231,11 @@ function generateSQL(analysis) {
     // Add conditions safely
     if (conditions.length > 0) {
         baseQuery += `\nAND ${conditions.join('\nAND ')}`;
+    }
+
+    // Add GROUP BY for aggregates
+    if (analysis.queryType === 'sailor_search') {
+        baseQuery += '\nGROUP BY s.id, s.name, s.yacht_club';
     }
 
     // Add safe ordering
