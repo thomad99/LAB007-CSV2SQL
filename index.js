@@ -355,79 +355,136 @@ async function safetyCheck() {
     }
 }
 
-// Update bulkInsertData to use parameterized queries
+// Update bulkInsertData function to handle blank/missing values
 async function bulkInsertData(rows) {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
 
-        // Validate and clean data
+        // Clean and validate data, allowing for blank/missing values
         const cleanRows = rows.map(row => ({
-            skipper: validateInput(row.Skipper),
-            yachtClub: validateInput(row.Yacht_Club),
-            regattaName: validateInput(row.Regatta_Name),
-            category: validateInput(row.Category),
-            boatName: validateInput(row.Boat_Name),
-            sailNumber: validateInput(row.Sail_Number),
-            position: validateInput(row.Position, 'position'),
-            totalPoints: row.Total_Points ? parseFloat(row.Total_Points) : null
+            regattaName: row.Regatta_Name?.trim() || null,
+            regattaDate: parseDate(row.Regatta_Date) || null,
+            skipper: row.Skipper?.trim() || null,
+            yachtClub: row.Yacht_Club?.trim() || null,
+            category: row.Category?.trim() || null,
+            boatName: row.Boat_Name?.trim() || null,
+            sailNumber: row.Sail_Number?.trim() || null,
+            position: row.Position ? parseInt(row.Position.toString().trim()) : null,
+            totalPoints: row.Total_Points ? parseFloat(row.Total_Points.toString().trim()) : null
         }));
 
-        // Use parameterized queries for bulk inserts
-        const skipperQuery = `
-            INSERT INTO skippers (name, yacht_club) 
-            SELECT v.name, v.yacht_club
-            FROM unnest($1::text[], $2::text[]) AS v(name, yacht_club)
-            ON CONFLICT (name) DO UPDATE 
-            SET yacht_club = EXCLUDED.yacht_club
-            RETURNING id, name`;
-
-        // 2. Bulk insert races
-        const raceQuery = `
-            INSERT INTO races (regatta_name, regatta_date, category, boat_name, sail_number)
-            SELECT * FROM UNNEST($1::text[], $2::date[], $3::text[], $4::text[], $5::text[])
-            RETURNING id, regatta_name, regatta_date`;
-
-        // 3. Bulk insert results
-        const resultQuery = `
-            INSERT INTO results (race_id, skipper_id, position, total_points)
-            SELECT * FROM UNNEST($1::int[], $2::int[], $3::int[], $4::decimal[])`;
-
-        // Execute queries
-        const skipperResult = await client.query(skipperQuery, [
-            cleanRows.map(r => r.skipper),
-            cleanRows.map(r => r.yachtClub)
-        ]);
-        const skipperMap = new Map(skipperResult.rows.map(r => [r.name, r.id]));
-
-        const raceResult = await client.query(
-            raceQuery,
-            [
-                cleanRows.map(r => r.regattaName),
-                cleanRows.map(r => new Date(r.regatta_date)),
-                cleanRows.map(r => r.category),
-                cleanRows.map(r => r.boatName),
-                cleanRows.map(r => r.sailNumber)
-            ]
+        // Filter out completely empty rows
+        const validRows = cleanRows.filter(row => 
+            row.regattaName || row.skipper || row.regattaDate
         );
 
-        await client.query(
-            resultQuery,
-            [
-                raceResult.rows.map(r => r.id),
-                cleanRows.map(r => skipperMap.get(r.skipper)),
-                cleanRows.map(r => r.position),
-                cleanRows.map(r => r.totalPoints)
-            ]
+        if (validRows.length === 0) {
+            throw new Error('No valid data found in CSV');
+        }
+
+        // Group skippers (only insert non-null skippers)
+        const skipperRows = validRows
+            .filter(row => row.skipper)
+            .map(row => ({
+                name: row.skipper,
+                yachtClub: row.yachtClub
+            }));
+
+        if (skipperRows.length > 0) {
+            const skipperQuery = `
+                INSERT INTO skippers (name, yacht_club) 
+                SELECT v.name, v.yacht_club
+                FROM unnest($1::text[], $2::text[]) AS v(name, yacht_club)
+                ON CONFLICT (name) DO UPDATE 
+                SET yacht_club = COALESCE(EXCLUDED.yacht_club, skippers.yacht_club)
+                RETURNING id, name`;
+
+            const skipperResult = await client.query(skipperQuery, [
+                skipperRows.map(r => r.name),
+                skipperRows.map(r => r.yachtClub)
+            ]);
+            const skipperMap = new Map(skipperResult.rows.map(r => [r.name, r.id]));
+        }
+
+        // Insert races (only for rows with at least one required field)
+        const raceRows = validRows.filter(row => 
+            row.regattaName || row.regattaDate
         );
+
+        if (raceRows.length > 0) {
+            const raceQuery = `
+                INSERT INTO races (regatta_name, regatta_date, category, boat_name, sail_number)
+                SELECT * FROM UNNEST($1::text[], $2::date[], $3::text[], $4::text[], $5::text[])
+                RETURNING id, regatta_name, regatta_date`;
+
+            const raceResult = await client.query(raceQuery, [
+                raceRows.map(r => r.regattaName),
+                raceRows.map(r => r.regattaDate),
+                raceRows.map(r => r.category),
+                raceRows.map(r => r.boatName),
+                raceRows.map(r => r.sailNumber)
+            ]);
+        }
+
+        // Insert results (only for rows with position or points)
+        const resultRows = validRows.filter(row => 
+            row.position !== null || row.totalPoints !== null
+        );
+
+        if (resultRows.length > 0) {
+            const resultQuery = `
+                INSERT INTO results (race_id, skipper_id, position, total_points)
+                SELECT * FROM UNNEST($1::int[], $2::int[], $3::int[], $4::decimal[])`;
+
+            await client.query(resultQuery, [
+                resultRows.map(r => r.raceId),
+                resultRows.map(r => r.skipperId),
+                resultRows.map(r => r.position),
+                resultRows.map(r => r.totalPoints)
+            ]);
+        }
 
         await client.query('COMMIT');
-        return rows.length;
+        return validRows.length;
     } catch (error) {
         await client.query('ROLLBACK');
         throw error;
     } finally {
         client.release();
+    }
+}
+
+// Add helper function for date parsing
+function parseDate(dateStr) {
+    if (!dateStr) return null;
+    
+    try {
+        dateStr = dateStr.trim();
+        let parsedDate;
+
+        if (dateStr.includes('/')) {
+            // Handle MM/DD/YYYY
+            const [month, day, year] = dateStr.split('/');
+            parsedDate = new Date(year, month - 1, day);
+        } else if (dateStr.includes('-')) {
+            // Handle YYYY-MM-DD
+            parsedDate = new Date(dateStr);
+        } else if (dateStr.match(/[A-Za-z]+/)) {
+            // Handle written month format
+            parsedDate = new Date(dateStr);
+            if (isNaN(parsedDate.getTime())) {
+                const match = dateStr.match(/([A-Za-z]+)\s+(\d+),?\s+(\d{4})/);
+                if (match) {
+                    const [_, month, day, year] = match;
+                    parsedDate = new Date(`${month} ${day}, ${year}`);
+                }
+            }
+        }
+
+        return isNaN(parsedDate?.getTime()) ? null : parsedDate;
+    } catch {
+        return null;
     }
 }
 
@@ -616,3 +673,36 @@ app.listen(port, async () => {
         process.exit(1);
     }
 });
+
+// Add this constant at the top of the file
+const EXPECTED_CSV_FIELDS = {
+    required: [],  // No strictly required fields
+    optional: [
+        'Regatta_Name',    // Name of the regatta event (can be blank)
+        'Regatta_Date',    // Date in format: MM/DD/YYYY, YYYY-MM-DD, or "Month DD, YYYY" (can be blank)
+        'Skipper',         // Skipper's full name (can be blank)
+        'Yacht_Club',      // Club affiliation (can be blank)
+        'Category',        // Race category/class (can be blank)
+        'Boat_Name',       // Name of the boat (can be blank)
+        'Sail_Number',     // Sail/registration number (can be blank)
+        'Position',        // Finishing position (numeric, can be blank)
+        'Total_Points'     // Points awarded (numeric, can be blank)
+    ]
+};
+
+// Update the CSV validation to be more lenient
+function validateCSVHeaders(firstRow) {
+    // Check that at least some of the expected fields are present
+    const validFields = EXPECTED_CSV_FIELDS.optional;
+    const foundFields = Object.keys(firstRow).filter(field => validFields.includes(field));
+    
+    if (foundFields.length === 0) {
+        throw new Error('CSV file does not contain any recognized columns. Expected some of: ' + validFields.join(', '));
+    }
+    
+    // Warn about unexpected fields but don't error
+    const unexpectedFields = Object.keys(firstRow).filter(field => !validFields.includes(field));
+    if (unexpectedFields.length > 0) {
+        console.warn(`Warning: Unexpected columns found: ${unexpectedFields.join(', ')}`);
+    }
+}
