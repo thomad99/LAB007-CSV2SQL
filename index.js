@@ -361,7 +361,7 @@ async function bulkInsertData(rows) {
     try {
         await client.query('BEGIN');
 
-        // Clean and validate data, allowing for blank/missing values
+        // Clean and validate data
         const cleanRows = rows.map(row => ({
             regattaName: row.Regatta_Name?.trim() || null,
             regattaDate: parseDate(row.Regatta_Date) || null,
@@ -374,79 +374,57 @@ async function bulkInsertData(rows) {
             totalPoints: row.Total_Points ? parseFloat(row.Total_Points.toString().trim()) : null
         }));
 
-        // Filter out completely empty rows
-        const validRows = cleanRows.filter(row => 
-            row.regattaName || row.skipper || row.regattaDate
-        );
-
-        if (validRows.length === 0) {
-            throw new Error('No valid data found in CSV');
-        }
-
-        // Group skippers (only insert non-null skippers)
-        const skipperRows = validRows
+        // Get unique skippers
+        const uniqueSkippers = [...new Set(cleanRows
             .filter(row => row.skipper)
-            .map(row => ({
-                name: row.skipper,
-                yachtClub: row.yachtClub
-            }));
+            .map(row => row.skipper))];
 
-        if (skipperRows.length > 0) {
-            const skipperQuery = `
-                INSERT INTO skippers (name, yacht_club) 
-                SELECT v.name, v.yacht_club
-                FROM unnest($1::text[], $2::text[]) AS v(name, yacht_club)
-                ON CONFLICT (name) DO UPDATE 
-                SET yacht_club = COALESCE(EXCLUDED.yacht_club, skippers.yacht_club)
-                RETURNING id, name`;
-
-            const skipperResult = await client.query(skipperQuery, [
-                skipperRows.map(r => r.name),
-                skipperRows.map(r => r.yachtClub)
-            ]);
-            const skipperMap = new Map(skipperResult.rows.map(r => [r.name, r.id]));
+        // Create skipper map
+        const skipperMap = new Map();
+        
+        // Insert skippers one by one to handle duplicates properly
+        for (const skipperName of uniqueSkippers) {
+            const result = await client.query(
+                `INSERT INTO skippers (name, yacht_club) 
+                 VALUES ($1, $2)
+                 ON CONFLICT (name) 
+                 DO UPDATE SET yacht_club = COALESCE($2, skippers.yacht_club)
+                 RETURNING id`,
+                [
+                    skipperName,
+                    cleanRows.find(r => r.skipper === skipperName)?.yachtClub
+                ]
+            );
+            skipperMap.set(skipperName, result.rows[0].id);
         }
 
-        // Insert races (only for rows with at least one required field)
-        const raceRows = validRows.filter(row => 
-            row.regattaName || row.regattaDate
-        );
+        // Insert races and get their IDs
+        const raceResults = await Promise.all(cleanRows.map(row => 
+            client.query(
+                `INSERT INTO races (regatta_name, regatta_date, category, boat_name, sail_number)
+                 VALUES ($1, $2, $3, $4, $5)
+                 RETURNING id`,
+                [row.regattaName, row.regattaDate, row.category, row.boatName, row.sailNumber]
+            )
+        ));
 
-        if (raceRows.length > 0) {
-            const raceQuery = `
-                INSERT INTO races (regatta_name, regatta_date, category, boat_name, sail_number)
-                SELECT * FROM UNNEST($1::text[], $2::date[], $3::text[], $4::text[], $5::text[])
-                RETURNING id, regatta_name, regatta_date`;
-
-            const raceResult = await client.query(raceQuery, [
-                raceRows.map(r => r.regattaName),
-                raceRows.map(r => r.regattaDate),
-                raceRows.map(r => r.category),
-                raceRows.map(r => r.boatName),
-                raceRows.map(r => r.sailNumber)
-            ]);
-        }
-
-        // Insert results (only for rows with position or points)
-        const resultRows = validRows.filter(row => 
-            row.position !== null || row.totalPoints !== null
-        );
-
-        if (resultRows.length > 0) {
-            const resultQuery = `
-                INSERT INTO results (race_id, skipper_id, position, total_points)
-                SELECT * FROM UNNEST($1::int[], $2::int[], $3::int[], $4::decimal[])`;
-
-            await client.query(resultQuery, [
-                resultRows.map(r => r.raceId),
-                resultRows.map(r => r.skipperId),
-                resultRows.map(r => r.position),
-                resultRows.map(r => r.totalPoints)
-            ]);
-        }
+        // Insert results using the skipper and race IDs
+        await Promise.all(cleanRows.map((row, index) => {
+            if (!row.position && !row.totalPoints) return Promise.resolve();
+            return client.query(
+                `INSERT INTO results (race_id, skipper_id, position, total_points)
+                 VALUES ($1, $2, $3, $4)`,
+                [
+                    raceResults[index].rows[0].id,
+                    row.skipper ? skipperMap.get(row.skipper) : null,
+                    row.position,
+                    row.totalPoints
+                ]
+            );
+        }));
 
         await client.query('COMMIT');
-        return validRows.length;
+        return cleanRows.length;
     } catch (error) {
         await client.query('ROLLBACK');
         throw error;
