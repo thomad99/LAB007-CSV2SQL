@@ -154,16 +154,17 @@ function generateSQL(analysis) {
         case "sailor_search":
             baseQuery = `
                 SELECT DISTINCT
-                    skippers.name,
-                    skippers.yacht_club,
-                    COUNT(DISTINCT races.id) as total_races,
-                    MIN(races.regatta_date) as first_race,
-                    MAX(races.regatta_date) as last_race
-                FROM skippers
-                LEFT JOIN results ON skippers.id = results.skipper_id
-                LEFT JOIN races ON results.race_id = races.id
+                    s.name,
+                    s.yacht_club,
+                    COUNT(DISTINCT r.id) as total_races,
+                    MIN(r.regatta_date) as first_race,
+                    MAX(r.regatta_date) as last_race
+                FROM skippers s
+                LEFT JOIN results res ON s.id = res.skipper_id
+                LEFT JOIN races r ON res.race_id = r.id
                 WHERE 1=1
-                GROUP BY skippers.id, skippers.name, skippers.yacht_club
+                GROUP BY s.id, s.name, s.yacht_club
+                ORDER BY s.name ASC
             `;
             break;
 
