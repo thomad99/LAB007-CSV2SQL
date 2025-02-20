@@ -24,6 +24,27 @@ const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY
 });
 
+// Add this near the top of the file with other constants
+const ENABLE_DB_WIPE = false; // Safety switch - must be manually enabled to allow any data deletion
+
+// Add these safety functions
+async function checkDatabaseHasData() {
+    const result = await pool.query(`
+        SELECT 
+            (SELECT COUNT(*) FROM races) as race_count,
+            (SELECT COUNT(*) FROM skippers) as skipper_count,
+            (SELECT COUNT(*) FROM results) as result_count
+    `);
+    return result.rows[0];
+}
+
+async function backupTableData(tableName) {
+    const timestamp = new Date().toISOString().replace(/[^0-9]/g, "");
+    const backupTable = `${tableName}_backup_${timestamp}`;
+    await pool.query(`CREATE TABLE IF NOT EXISTS ${backupTable} AS SELECT * FROM ${tableName}`);
+    return backupTable;
+}
+
 // Function to analyze query using GPT
 async function analyzeQuery(query) {
     try {
@@ -35,23 +56,27 @@ async function analyzeQuery(query) {
                     content: `You are a SQL query analyzer for a sailing database. Extract information from natural language queries.
                     Return JSON with these fields:
                     - queryType: one of:
-                        "winner" (for queries about who won a specific race)
-                        "winners_list" (for queries about multiple race winners)
-                        "most_wins" (for queries about who won the most)
-                        "sailor_results" (for race results of a sailor)
-                        "regatta_results" (for results of a specific regatta)
-                        "team_results" (for results by yacht club)
-                    - sailorName: the sailor's name if mentioned
-                    - regattaName: the regatta/race name if mentioned
-                    - yachtClub: the team/club name if mentioned
+                        "winner" (for queries about race winners)
+                        "sailor_search" (for finding/listing sailors)
+                        "sailor_stats" (for sailor performance stats)
+                        "team_members" (for listing team members)
+                        "team_results" (for team performance)
+                        "regatta_count" (for counting/listing regattas)
+                        "regatta_results" (for specific regatta results)
+                        "location_races" (for races at a location)
+                        "database_status" (for database stats/freshness)
+                        "performance_stats" (for rankings/performance analysis)
+                    - sailorName: sailor's name if mentioned
+                    - regattaName: regatta/event name if mentioned
+                    - yachtClub: team/club name if mentioned
+                    - location: race location if mentioned
                     - year: specific year if mentioned (YYYY format)
-                    - timeFrame: "this_year", "specific_year", or "all_time"
+                    - position: specific position mentioned (e.g., "top 3", "first place")
+                    - timeFrame: "this_year", "specific_year", "all_time", "recent"
                     Example queries:
-                    "Who won Sailfest 2024?" -> {"queryType": "winner", "regattaName": "Sailfest", "year": "2024"}
-                    "Show me the winners of all races in 2024" -> {"queryType": "winners_list", "year": "2024"}
-                    "who won the most races in 2023" -> {"queryType": "most_wins", "year": "2023"}
-                    "show me all race results for John in 2024" -> {"queryType": "sailor_results", "sailorName": "John", "year": "2024"}
-                    "What were the results from Sailfest?" -> {"queryType": "regatta_results", "regattaName": "Sailfest"}`
+                    "Show me all sailors in SYC" -> {"queryType": "team_members", "yachtClub": "SYC"}
+                    "Who has the most wins?" -> {"queryType": "performance_stats", "timeFrame": "all_time"}
+                    "Show me top 3 finishes for John" -> {"queryType": "sailor_stats", "sailorName": "John", "position": "3"}`
                 },
                 {
                     role: "user",
@@ -75,7 +100,134 @@ function generateSQL(analysis) {
     let paramCount = 1;
 
     switch (analysis.queryType) {
-        case "most_wins":
+        case "sailor_stats":
+            baseQuery = `
+                SELECT 
+                    s.name as sailor_name,
+                    s.yacht_club,
+                    COUNT(DISTINCT r.id) as total_races,
+                    COUNT(DISTINCT CASE WHEN res.position = 1 THEN r.id END) as wins,
+                    COUNT(DISTINCT CASE WHEN res.position <= 3 THEN r.id END) as podiums,
+                    ROUND(AVG(res.position), 1) as avg_position,
+                    MIN(res.position) as best_position,
+                    array_agg(DISTINCT r.regatta_name) as regattas
+                FROM skippers s
+                LEFT JOIN results res ON s.id = res.skipper_id
+                LEFT JOIN races r ON res.race_id = r.id
+                WHERE 1=1
+                GROUP BY s.id, s.name, s.yacht_club
+            `;
+            break;
+
+        case "performance_stats":
+            baseQuery = `
+                WITH sailor_stats AS (
+                    SELECT 
+                        s.name,
+                        s.yacht_club,
+                        COUNT(DISTINCT r.id) as races,
+                        COUNT(DISTINCT CASE WHEN res.position = 1 THEN r.id END) as wins,
+                        ROUND(COUNT(DISTINCT CASE WHEN res.position = 1 THEN r.id END)::numeric / 
+                              NULLIF(COUNT(DISTINCT r.id), 0) * 100, 1) as win_percentage
+                    FROM skippers s
+                    LEFT JOIN results res ON s.id = res.skipper_id
+                    LEFT JOIN races r ON res.race_id = r.id
+                    GROUP BY s.id, s.name, s.yacht_club
+                )
+                SELECT *
+                FROM sailor_stats
+                WHERE races > 0
+                ORDER BY wins DESC, win_percentage DESC
+            `;
+            break;
+
+        case "regatta_count":
+            baseQuery = `
+                SELECT 
+                    COUNT(DISTINCT regatta_name) as regatta_count,
+                    array_agg(DISTINCT regatta_name) as regatta_list
+                FROM races
+                WHERE 1=1
+            `;
+            break;
+
+        case "sailor_search":
+            baseQuery = `
+                SELECT DISTINCT
+                    skippers.name,
+                    skippers.yacht_club,
+                    COUNT(DISTINCT races.id) as total_races,
+                    MIN(races.regatta_date) as first_race,
+                    MAX(races.regatta_date) as last_race
+                FROM skippers
+                LEFT JOIN results ON skippers.id = results.skipper_id
+                LEFT JOIN races ON results.race_id = races.id
+                WHERE 1=1
+                GROUP BY skippers.id, skippers.name, skippers.yacht_club
+            `;
+            break;
+
+        case "database_status":
+            baseQuery = `
+                SELECT 
+                    COUNT(DISTINCT regatta_name) as total_regattas,
+                    COUNT(DISTINCT skippers.id) as total_sailors,
+                    MIN(regatta_date) as earliest_race,
+                    MAX(regatta_date) as latest_race,
+                    COUNT(DISTINCT yacht_club) as total_clubs
+                FROM races
+                LEFT JOIN results ON races.id = results.race_id
+                LEFT JOIN skippers ON results.skipper_id = skippers.id
+            `;
+            break;
+
+        case "location_races":
+            baseQuery = `
+                SELECT 
+                    regatta_name,
+                    regatta_date,
+                    COUNT(DISTINCT results.skipper_id) as participants
+                FROM races
+                LEFT JOIN results ON races.id = results.race_id
+                WHERE 1=1
+                GROUP BY regatta_name, regatta_date
+                ORDER BY regatta_date DESC
+            `;
+            break;
+
+        case "team_members":
+            baseQuery = `
+                SELECT 
+                    skippers.name,
+                    COUNT(DISTINCT races.id) as races_participated,
+                    array_agg(DISTINCT races.regatta_name) as regattas,
+                    MIN(results.position) as best_position
+                FROM skippers
+                LEFT JOIN results ON skippers.id = results.skipper_id
+                LEFT JOIN races ON results.race_id = races.id
+                WHERE 1=1
+                GROUP BY skippers.id, skippers.name
+                ORDER BY races_participated DESC
+            `;
+            break;
+
+        case "team_results":
+            baseQuery = `
+                SELECT 
+                    races.regatta_date,
+                    races.regatta_name,
+                    skippers.name as skipper,
+                    results.position,
+                    races.category
+                FROM results
+                JOIN races ON results.race_id = races.id
+                JOIN skippers ON results.skipper_id = skippers.id
+                WHERE 1=1
+                ORDER BY races.regatta_date DESC, results.position ASC
+            `;
+            break;
+
+        case "winner":
             baseQuery = `
                 SELECT 
                     skippers.name as skipper_name,
@@ -107,31 +259,46 @@ function generateSQL(analysis) {
         default:
             baseQuery = `
                 SELECT 
-                    TO_CHAR(races.regatta_date, 'YYYY-MM-DD') as race_date,
-                    races.regatta_name,
-                    races.category,
-                    races.boat_name,
-                    races.sail_number,
-                    skippers.name as skipper_name,
-                    skippers.yacht_club,
-                    results.position,
-                    results.total_points
-                FROM results
-                JOIN races ON results.race_id = races.id
-                JOIN skippers ON results.skipper_id = skippers.id
+                    TO_CHAR(r.regatta_date, 'YYYY-MM-DD') as race_date,
+                    r.regatta_name,
+                    r.category,
+                    s.name as skipper_name,
+                    s.yacht_club,
+                    res.position,
+                    res.total_points
+                FROM results res
+                JOIN races r ON res.race_id = r.id
+                JOIN skippers s ON res.skipper_id = s.id
                 WHERE 1=1
             `;
     }
 
-    // Add specific conditions based on analysis
+    // Add conditions
     if (analysis.sailorName) {
         params.push(`%${analysis.sailorName}%`);
-        baseQuery += `\nAND LOWER(skippers.name) LIKE LOWER($${paramCount++})`;
+        baseQuery += `\nAND LOWER(s.name) LIKE LOWER($${paramCount++})`;
+    }
+
+    if (analysis.yachtClub) {
+        params.push(`%${analysis.yachtClub}%`);
+        baseQuery += `\nAND LOWER(s.yacht_club) LIKE LOWER($${paramCount++})`;
+    }
+
+    if (analysis.position) {
+        const pos = parseInt(analysis.position);
+        if (!isNaN(pos)) {
+            baseQuery += `\nAND res.position <= ${pos}`;
+        }
     }
 
     if (analysis.regattaName) {
         params.push(`%${analysis.regattaName}%`);
-        baseQuery += `\nAND LOWER(races.regatta_name) LIKE LOWER($${paramCount++})`;
+        baseQuery += `\nAND LOWER(r.regatta_name) LIKE LOWER($${paramCount++})`;
+    }
+
+    if (analysis.location) {
+        params.push(`%${analysis.location}%`);
+        baseQuery += `\nAND LOWER(r.regatta_name) LIKE LOWER($${paramCount++})`;
     }
 
     if (analysis.year) {
@@ -141,7 +308,7 @@ function generateSQL(analysis) {
     }
 
     if (analysis.queryType === "winner") {
-        baseQuery += `\nAND results.position = 1`;
+        baseQuery += `\nAND res.position = 1`;
     }
 
     // Add appropriate ordering
@@ -160,17 +327,20 @@ function generateSQL(analysis) {
     return { query: baseQuery, params };
 }
 
-// Add this function to create tables if they don't exist
+// Update the initialization function with safeguards
 async function initializeDatabase() {
     try {
-        // Drop existing tables in correct order
-        await pool.query(`
-            DROP TABLE IF EXISTS results CASCADE;
-            DROP TABLE IF EXISTS races CASCADE;
-            DROP TABLE IF EXISTS skippers CASCADE;
-        `);
+        // First check if we have existing data
+        const counts = await checkDatabaseHasData();
+        const hasExistingData = counts.race_count > 0 || counts.skipper_count > 0 || counts.result_count > 0;
 
-        // Create new tables with nullable fields
+        if (hasExistingData) {
+            console.log('⚠️ Database already contains data:', counts);
+            console.log('✅ Skipping initialization to protect existing data');
+            return;
+        }
+
+        // Only create tables if they don't exist - NEVER drop tables
         await pool.query(`
             CREATE TABLE IF NOT EXISTS races (
                 id SERIAL PRIMARY KEY,
@@ -178,13 +348,17 @@ async function initializeDatabase() {
                 regatta_date DATE,
                 category VARCHAR(50),
                 boat_name VARCHAR(100),
-                sail_number VARCHAR(20)
+                sail_number VARCHAR(20),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
             CREATE TABLE IF NOT EXISTS skippers (
                 id SERIAL PRIMARY KEY,
                 name VARCHAR(100) NOT NULL UNIQUE,
-                yacht_club VARCHAR(100)
+                yacht_club VARCHAR(100),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
             CREATE TABLE IF NOT EXISTS results (
@@ -192,13 +366,66 @@ async function initializeDatabase() {
                 race_id INTEGER REFERENCES races(id),
                 skipper_id INTEGER REFERENCES skippers(id),
                 position INTEGER,
-                total_points DECIMAL(5,2)
+                total_points DECIMAL(5,2),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         `);
-        console.log('Database tables initialized successfully');
+
+        // Add triggers to update last_modified timestamp
+        await pool.query(`
+            CREATE OR REPLACE FUNCTION update_modified_column()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                NEW.last_modified = CURRENT_TIMESTAMP;
+                RETURN NEW;
+            END;
+            $$ language 'plpgsql';
+
+            DROP TRIGGER IF EXISTS update_races_modtime ON races;
+            CREATE TRIGGER update_races_modtime
+                BEFORE UPDATE ON races
+                FOR EACH ROW
+                EXECUTE FUNCTION update_modified_column();
+
+            DROP TRIGGER IF EXISTS update_skippers_modtime ON skippers;
+            CREATE TRIGGER update_skippers_modtime
+                BEFORE UPDATE ON skippers
+                FOR EACH ROW
+                EXECUTE FUNCTION update_modified_column();
+
+            DROP TRIGGER IF EXISTS update_results_modtime ON results;
+            CREATE TRIGGER update_results_modtime
+                BEFORE UPDATE ON results
+                FOR EACH ROW
+                EXECUTE FUNCTION update_modified_column();
+        `);
+
+        // Verify tables are empty (double-check)
+        const finalCounts = await checkDatabaseHasData();
+        console.log('✅ Database tables created successfully. Current counts:', finalCounts);
+
     } catch (error) {
-        console.error('Database initialization error:', error);
+        console.error('❌ Database initialization error:', error);
         throw error;
+    }
+}
+
+// Add safety check before any potentially destructive operations
+async function safetyCheck() {
+    if (!ENABLE_DB_WIPE) {
+        throw new Error('Database wipe protection is enabled. Set ENABLE_DB_WIPE to true to proceed.');
+    }
+    
+    const counts = await checkDatabaseHasData();
+    if (counts.race_count > 0 || counts.skipper_count > 0 || counts.result_count > 0) {
+        // Create backups before proceeding
+        const backups = await Promise.all([
+            backupTableData('races'),
+            backupTableData('skippers'),
+            backupTableData('results')
+        ]);
+        console.log('Created backup tables:', backups);
     }
 }
 
@@ -213,16 +440,24 @@ app.get('/api/status', (req, res) => {
 
 app.post('/api/chat', async (req, res) => {
     console.log('Chat API called with query:', req.body.query);
-    const { query } = req.body;
     
     try {
+        // First, verify data exists in the database
+        const tableCheck = await pool.query(`
+            SELECT 
+                (SELECT COUNT(*) FROM races) as race_count,
+                (SELECT COUNT(*) FROM skippers) as skipper_count,
+                (SELECT COUNT(*) FROM results) as result_count
+        `);
+        console.log('Database table counts:', tableCheck.rows[0]);
+
         // Verify OpenAI configuration
         if (!process.env.OPENAI_API_KEY) {
             throw new Error('OpenAI API key is not configured');
         }
 
         // Analyze query using GPT
-        const analysis = await analyzeQuery(query);
+        const analysis = await analyzeQuery(req.body.query);
         console.log('GPT Analysis:', analysis);
 
         if (!analysis) {
@@ -238,7 +473,7 @@ app.post('/api/chat', async (req, res) => {
 
         // Execute query
         const result = await pool.query(sqlQuery, params);
-        console.log('Query results:', result.rows.length, 'rows found');
+        console.log('Raw query results:', result.rows);
 
         // Generate response
         let message = 'Here are the results for your query:';
@@ -251,16 +486,22 @@ app.post('/api/chat', async (req, res) => {
             message = `Found ${races} races for ${sailor}. Average position: ${avgPosition}`;
         }
 
+        // After executing the query, log the SQL and results
+        console.log('Executing SQL:', sqlQuery);
+        console.log('With parameters:', params);
+        console.log('Query results:', result.rows.length, 'rows found');
+
         res.json({
             message,
             data: result.rows
         });
 
     } catch (error) {
-        console.error('Chat query error:', error);
+        console.error('Detailed chat error:', error);
         res.status(500).json({ 
             error: 'Failed to process your question',
-            details: error.message 
+            details: error.message,
+            stack: error.stack
         });
     }
 });
@@ -271,6 +512,7 @@ app.post('/upload', upload.single('file'), async (req, res) => {
         return res.status(400).json({ error: 'No file uploaded' });
     }
 
+    console.log('Starting file upload process');
     try {
         const results = [];
         fs.createReadStream(req.file.path)
@@ -278,10 +520,21 @@ app.post('/upload', upload.single('file'), async (req, res) => {
                 columns: true,
                 skip_empty_lines: true
             }))
-            .on('data', (data) => results.push(data))
+            .on('data', (data) => {
+                console.log('Parsed row:', data);
+                results.push(data);
+            })
             .on('end', async () => {
+                console.log(`Parsed ${results.length} rows from CSV`);
                 try {
                     for (const row of results) {
+                        // Log each row being processed
+                        console.log('Processing row:', {
+                            regatta: row.Regatta_Name,
+                            date: row.Regatta_Date,
+                            skipper: row.Skipper
+                        });
+
                         // First, ensure the skipper exists
                         const skipperResult = await pool.query(
                             'INSERT INTO skippers (name, yacht_club) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET yacht_club = EXCLUDED.yacht_club RETURNING id',
@@ -312,19 +565,17 @@ app.post('/upload', upload.single('file'), async (req, res) => {
                             [raceId, skipperId, position, totalPoints]
                         );
                     }
-
-                    // Clean up uploaded file
-                    fs.unlinkSync(req.file.path);
-
+                    console.log('Upload completed successfully');
                     res.json({
                         message: 'Regatta results successfully imported',
                         rowsImported: results.length
                     });
                 } catch (error) {
-                    console.error('Database error:', error);
+                    console.error('Detailed upload error:', error);
                     res.status(500).json({ 
                         error: 'Database operation failed',
-                        details: error.message 
+                        details: error.message,
+                        stack: error.stack
                     });
                 }
             });
