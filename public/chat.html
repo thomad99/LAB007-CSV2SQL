@@ -20,6 +20,10 @@
         .logo-container {
             text-align: center;
             padding: 10px 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 20px;
         }
         .logo {
             max-width: 90px;
@@ -176,12 +180,27 @@
             height: 300px;
             width: 100%;
         }
+        .clear-chat {
+            background-color: #dc3545;
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.2s;
+        }
+        .clear-chat:hover {
+            background-color: #c82333;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="logo-container">
+            <div></div>
             <img src="LOGO BLUE.JPEG" alt="LoveSailing.AI Logo" class="logo">
+            <button class="clear-chat" onclick="clearChat()">Clear Chat</button>
         </div>
         <div class="chat-container">
             <div class="chat-messages" id="chatMessages">
@@ -201,6 +220,16 @@
     </div>
 
     <script>
+        function clearChat() {
+            const chatMessages = document.getElementById('chatMessages');
+            chatMessages.innerHTML = `
+                <div class="message bot-message">
+                    Welcome to LoveSailing.AI  Talk to me
+                </div>
+            `;
+            document.getElementById('queryInput').value = '';
+        }
+
         const chatForm = document.getElementById('chatForm');
         const chatMessages = document.getElementById('chatMessages');
         const userInput = document.getElementById('queryInput');
