@@ -100,6 +100,38 @@
             font-weight: bold;
             color: #28a745;
         }
+        .danger-zone {
+            background-color: #fff3f3;
+            border: 2px solid #dc3545;
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 20px;
+        }
+        .danger-zone h2 {
+            color: #dc3545;
+            margin-top: 0;
+            border-bottom: 2px solid #dc3545;
+            padding-bottom: 10px;
+        }
+        .danger-zone p {
+            color: #721c24;
+            margin-bottom: 15px;
+        }
+        .clear-db-btn {
+            background-color: #dc3545;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .clear-db-btn:hover {
+            background-color: #c82333;
+        }
+        .clear-db-btn:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+        }
     </style>
 </head>
 <body>
@@ -125,6 +157,16 @@
         <div class="status-box">
             <h2>Database Status</h2>
             <div id="dbStatus">Loading database status...</div>
+        </div>
+        <div class="danger-zone">
+            <h2>⚠️ Danger Zone</h2>
+            <p>Clear all data from the database. This action cannot be undone!</p>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="confirmClear"> I understand this will permanently delete all data
+                </label>
+            </div>
+            <button id="clearDbBtn" class="clear-db-btn" disabled>Clear Database</button>
         </div>
         <div id="debugWindow" class="debug-window"></div>
     </div>
@@ -257,6 +299,49 @@
 
         // Initial debug message
         logDebug('CSV2POSTGRES Uploader initialized');
+
+        // Database clear functionality
+        const confirmClearCheckbox = document.getElementById('confirmClear');
+        const clearDbBtn = document.getElementById('clearDbBtn');
+
+        confirmClearCheckbox.addEventListener('change', (e) => {
+            clearDbBtn.disabled = !e.target.checked;
+        });
+
+        clearDbBtn.addEventListener('click', async () => {
+            if (!confirm('Are you absolutely sure you want to clear all data? This cannot be undone!')) {
+                return;
+            }
+
+            try {
+                logDebug('Initiating database clear...');
+                const response = await fetch('/api/clear-database', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    logDebug('Database cleared successfully');
+                    status.style.display = 'block';
+                    status.textContent = 'Database cleared successfully';
+                    status.className = 'status success';
+                    confirmClearCheckbox.checked = false;
+                    clearDbBtn.disabled = true;
+                    updateDatabaseStatus();
+                } else {
+                    throw new Error(result.error || 'Failed to clear database');
+                }
+            } catch (error) {
+                logDebug(`Failed to clear database: ${error.message}`, true);
+                status.style.display = 'block';
+                status.textContent = `Error: ${error.message}`;
+                status.className = 'status error';
+            }
+        });
     </script>
 </body>
 </html> 
