@@ -660,10 +660,7 @@ app.post('/upload', upload.single('file'), async (req, res) => {
             });
     } catch (error) {
         console.error('File processing error:', error);
-        res.status(500).json({ 
-            error: 'File processing failed',
-            details: error.message
-        });
+        res.status(500).json({ error: 'File processing failed', details: error.message });
     }
 });
 
@@ -725,3 +722,35 @@ function validateCSVHeaders(firstRow) {
         console.warn(`Warning: Unexpected columns found: ${unexpectedFields.join(', ')}`);
     }
 }
+
+// Add database clear endpoint
+app.post('/api/clear-database', async (req, res) => {
+    try {
+        await pool.query('BEGIN');
+        
+        // Create backup tables before clearing
+        const timestamp = new Date().toISOString().replace(/[^0-9]/g, "");
+        await pool.query(`CREATE TABLE IF NOT EXISTS results_backup_${timestamp} AS SELECT * FROM results`);
+        await pool.query(`CREATE TABLE IF NOT EXISTS races_backup_${timestamp} AS SELECT * FROM races`);
+        await pool.query(`CREATE TABLE IF NOT EXISTS skippers_backup_${timestamp} AS SELECT * FROM skippers`);
+        
+        // Clear tables in correct order
+        await pool.query('DELETE FROM results');
+        await pool.query('DELETE FROM races');
+        await pool.query('DELETE FROM skippers');
+        
+        await pool.query('COMMIT');
+        
+        res.json({ 
+            message: 'Database cleared successfully',
+            backupTimestamp: timestamp
+        });
+    } catch (error) {
+        await pool.query('ROLLBACK');
+        console.error('Database clear error:', error);
+        res.status(500).json({ 
+            error: 'Failed to clear database',
+            details: error.message
+        });
+    }
+});
