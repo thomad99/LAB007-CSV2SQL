@@ -71,6 +71,35 @@
         .debug-error {
             color: #ff5252;
         }
+        .status-box {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .status-box h2 {
+            margin-top: 0;
+            color: #333;
+            border-bottom: 2px solid #007bff;
+            padding-bottom: 10px;
+        }
+        .status-section {
+            margin: 15px 0;
+        }
+        .status-section h3 {
+            color: #007bff;
+            margin: 10px 0;
+        }
+        .status-item {
+            margin: 5px 0;
+            padding: 5px 0;
+            border-bottom: 1px solid #eee;
+        }
+        .status-count {
+            font-weight: bold;
+            color: #28a745;
+        }
     </style>
 </head>
 <body>
@@ -93,6 +122,10 @@
             </form>
         </div>
         <div id="status" class="status"></div>
+        <div class="status-box">
+            <h2>Database Status</h2>
+            <div id="dbStatus">Loading database status...</div>
+        </div>
         <div id="debugWindow" class="debug-window"></div>
     </div>
 
@@ -123,6 +156,52 @@
         document.getElementById('tableName').addEventListener('input', (e) => {
             logDebug(`Table name updated: ${e.target.value || '(default)'}`);
         });
+
+        // Function to fetch and display database status
+        async function updateDatabaseStatus() {
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ query: "show database stats" })
+                });
+                
+                const data = await response.json();
+                const dbStatus = document.getElementById('dbStatus');
+                
+                let statusHTML = `
+                    <div class="status-section">
+                        <h3>Database Tables</h3>
+                        <div class="status-item">Skippers: name, yacht_club</div>
+                        <div class="status-item">Races: regatta_name, regatta_date, category, boat_name, sail_number</div>
+                        <div class="status-item">Results: position, total_points</div>
+                    </div>
+                    <div class="status-section">
+                        <h3>Current Counts</h3>
+                        <div class="status-item">Total Sailors: <span class="status-count">${data.data[0].total_sailors}</span></div>
+                        <div class="status-item">Total Races: <span class="status-count">${data.data[0].total_races}</span></div>
+                        <div class="status-item">Total Clubs: <span class="status-count">${data.data[0].total_clubs}</span></div>
+                        <div class="status-item">Total Results: <span class="status-count">${data.data[0].total_results}</span></div>
+                    </div>
+                    <div class="status-section">
+                        <h3>Date Range</h3>
+                        <div class="status-item">Earliest Race: <span class="status-count">${new Date(data.data[0].earliest_race).toLocaleDateString()}</span></div>
+                        <div class="status-item">Latest Race: <span class="status-count">${new Date(data.data[0].latest_race).toLocaleDateString()}</span></div>
+                    </div>
+                `;
+                
+                dbStatus.innerHTML = statusHTML;
+            } catch (error) {
+                console.error('Error fetching database status:', error);
+                document.getElementById('dbStatus').innerHTML = 
+                    '<div class="status-item error">Error loading database status</div>';
+            }
+        }
+
+        // Update status when page loads
+        updateDatabaseStatus();
 
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
@@ -159,6 +238,8 @@
                     status.textContent = `Success! ${result.rowsImported} rows imported.`;
                     status.classList.add('success');
                     form.reset();
+                    // Update database status after successful upload
+                    updateDatabaseStatus();
                 } else {
                     const errorMsg = `Error: ${result.error}`;
                     logDebug(errorMsg, true);
