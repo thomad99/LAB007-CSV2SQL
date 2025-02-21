@@ -132,6 +132,39 @@
             background-color: #6c757d;
             cursor: not-allowed;
         }
+        .backup-section {
+            background-color: #f8f9fa;
+            border: 2px solid #007bff;
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 20px;
+        }
+        .backup-section h2 {
+            color: #007bff;
+            margin-top: 0;
+            border-bottom: 2px solid #007bff;
+            padding-bottom: 10px;
+        }
+        .backup-info {
+            margin: 10px 0;
+            font-style: italic;
+        }
+        .backup-btn, .restore-btn {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+        .backup-btn:hover, .restore-btn:hover {
+            background-color: #0056b3;
+        }
+        .backup-btn:disabled, .restore-btn:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+        }
     </style>
 </head>
 <body>
@@ -167,6 +200,12 @@
                 </label>
             </div>
             <button id="clearDbBtn" class="clear-db-btn" disabled>Clear Database</button>
+        </div>
+        <div class="backup-section">
+            <h2>💾 Database Backup</h2>
+            <div id="backupInfo" class="backup-info">Checking backup status...</div>
+            <button id="backupBtn" class="backup-btn">Create Backup</button>
+            <button id="restoreBtn" class="restore-btn" disabled>Restore Latest Backup</button>
         </div>
         <div id="debugWindow" class="debug-window"></div>
     </div>
@@ -342,6 +381,91 @@
                 status.className = 'status error';
             }
         });
+
+        // Backup functionality
+        const backupBtn = document.getElementById('backupBtn');
+        const restoreBtn = document.getElementById('restoreBtn');
+        const backupInfo = document.getElementById('backupInfo');
+        let latestBackupTimestamp = null;
+
+        async function checkLatestBackup() {
+            try {
+                const response = await fetch('/api/latest-backup');
+                const data = await response.json();
+                
+                latestBackupTimestamp = data.backupTimestamp;
+                if (latestBackupTimestamp) {
+                    const date = new Date(latestBackupTimestamp.replace(/(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/, '$1-$2-$3T$4:$5:$6'));
+                    backupInfo.textContent = `Latest backup: ${date.toLocaleString()}`;
+                    restoreBtn.disabled = false;
+                } else {
+                    backupInfo.textContent = 'No backup available';
+                    restoreBtn.disabled = true;
+                }
+            } catch (error) {
+                backupInfo.textContent = 'Error checking backup status';
+                console.error('Backup check error:', error);
+            }
+        }
+
+        backupBtn.addEventListener('click', async () => {
+            try {
+                backupBtn.disabled = true;
+                backupInfo.textContent = 'Creating backup...';
+                
+                const response = await fetch('/api/backup-database', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                
+                const result = await response.json();
+                if (response.ok) {
+                    logDebug('Database backup created successfully');
+                    await checkLatestBackup();
+                } else {
+                    throw new Error(result.error || 'Failed to create backup');
+                }
+            } catch (error) {
+                logDebug(`Failed to create backup: ${error.message}`, true);
+                backupInfo.textContent = 'Error creating backup';
+            } finally {
+                backupBtn.disabled = false;
+            }
+        });
+
+        restoreBtn.addEventListener('click', async () => {
+            if (!confirm('Are you sure you want to restore the database to the latest backup?')) {
+                return;
+            }
+
+            try {
+                restoreBtn.disabled = true;
+                backupInfo.textContent = 'Restoring from backup...';
+                
+                const response = await fetch('/api/restore-database', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ backupTimestamp: latestBackupTimestamp })
+                });
+                
+                const result = await response.json();
+                if (response.ok) {
+                    logDebug('Database restored successfully');
+                    backupInfo.textContent = 'Database restored successfully';
+                    updateDatabaseStatus();
+                } else {
+                    throw new Error(result.error || 'Failed to restore backup');
+                }
+            } catch (error) {
+                logDebug(`Failed to restore backup: ${error.message}`, true);
+                backupInfo.textContent = 'Error restoring backup';
+            } finally {
+                restoreBtn.disabled = false;
+            }
+        });
+
+        // Check for latest backup on page load
+        checkLatestBackup();
     </script>
 </body>
 </html> 
