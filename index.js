@@ -754,3 +754,80 @@ app.post('/api/clear-database', async (req, res) => {
         });
     }
 });
+
+// Add backup and restore endpoints
+app.post('/api/backup-database', async (req, res) => {
+    try {
+        await pool.query('BEGIN');
+        
+        const timestamp = new Date().toISOString().replace(/[^0-9]/g, "");
+        const backupPrefix = `backup_${timestamp}`;
+        
+        // Create backup tables
+        await pool.query(`CREATE TABLE ${backupPrefix}_results AS SELECT * FROM results`);
+        await pool.query(`CREATE TABLE ${backupPrefix}_races AS SELECT * FROM races`);
+        await pool.query(`CREATE TABLE ${backupPrefix}_skippers AS SELECT * FROM skippers`);
+        
+        await pool.query('COMMIT');
+        
+        res.json({ 
+            message: 'Database backup created successfully',
+            backupTimestamp: timestamp
+        });
+    } catch (error) {
+        await pool.query('ROLLBACK');
+        console.error('Backup error:', error);
+        res.status(500).json({ error: 'Failed to create backup' });
+    }
+});
+
+app.get('/api/latest-backup', async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT table_name 
+            FROM information_schema.tables 
+            WHERE table_name LIKE 'backup_%'
+            ORDER BY table_name DESC
+            LIMIT 1
+        `);
+        
+        if (result.rows.length > 0) {
+            const backupTimestamp = result.rows[0].table_name.split('_')[1];
+            res.json({ backupTimestamp });
+        } else {
+            res.json({ backupTimestamp: null });
+        }
+    } catch (error) {
+        console.error('Error checking backup:', error);
+        res.status(500).json({ error: 'Failed to check backup status' });
+    }
+});
+
+app.post('/api/restore-database', async (req, res) => {
+    try {
+        const { backupTimestamp } = req.body;
+        if (!backupTimestamp) {
+            throw new Error('No backup timestamp provided');
+        }
+
+        await pool.query('BEGIN');
+
+        // Clear current tables
+        await pool.query('DELETE FROM results');
+        await pool.query('DELETE FROM races');
+        await pool.query('DELETE FROM skippers');
+
+        // Restore from backup
+        await pool.query(`INSERT INTO results SELECT * FROM backup_${backupTimestamp}_results`);
+        await pool.query(`INSERT INTO races SELECT * FROM backup_${backupTimestamp}_races`);
+        await pool.query(`INSERT INTO skippers SELECT * FROM backup_${backupTimestamp}_skippers`);
+
+        await pool.query('COMMIT');
+        
+        res.json({ message: 'Database restored successfully' });
+    } catch (error) {
+        await pool.query('ROLLBACK');
+        console.error('Restore error:', error);
+        res.status(500).json({ error: 'Failed to restore database' });
+    }
+});
