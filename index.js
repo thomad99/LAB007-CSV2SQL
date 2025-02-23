@@ -190,7 +190,7 @@ function generateSQL(analysis) {
         case "sailor_search":
             values.sailorName = analysis.sailorName;
             baseQuery = `
-                SELECT 
+                SELECT DISTINCT
                     s.name as skipper_name,
                     s.yacht_club,
                     r.boat_name,
@@ -202,20 +202,21 @@ function generateSQL(analysis) {
                 FROM (
                     SELECT id, name, yacht_club 
                     FROM skippers 
-                    WHERE LOWER(name) LIKE LOWER($1)
+                    WHERE LOWER(name) LIKE LOWER('%' || $1 || '%')
                     UNION
                     SELECT DISTINCT s.id, s.name, s.yacht_club
                     FROM skippers s
                     JOIN results res ON s.id = res.skipper_id
                     JOIN races r ON res.race_id = r.id
-                    WHERE LOWER(r.boat_name) LIKE LOWER($1)
+                    WHERE LOWER(r.boat_name) LIKE LOWER('%' || $1 || '%')
                 ) s
                 LEFT JOIN results res ON s.id = res.skipper_id
                 LEFT JOIN races r ON res.race_id = r.id
+                WHERE s.name LIKE '%' || $1 || '%' OR r.boat_name LIKE '%' || $1 || '%'
                 GROUP BY s.id, s.name, s.yacht_club, r.boat_name
                 ORDER BY s.name ASC
             `;
-            params.push(`%${values.sailorName}%`);
+            params.push(values.sailorName);
             return { query: baseQuery, params };
 
         case "database_status":
@@ -245,6 +246,28 @@ function generateSQL(analysis) {
                 GROUP BY r.id, regatta_name, regatta_date, category
             `;
             break;
+
+        case "boat_search":
+            values.boatName = analysis.boatName;
+            baseQuery = `
+                SELECT 
+                    r.boat_name,
+                    s.name as skipper_name,
+                    s.yacht_club,
+                    COUNT(DISTINCT r.id) as total_races,
+                    COUNT(DISTINCT CASE WHEN res.position = 1 THEN r.id END) as wins,
+                    MIN(res.position) as best_position,
+                    MIN(r.regatta_date) as first_race,
+                    MAX(r.regatta_date) as last_race
+                FROM races r
+                LEFT JOIN results res ON r.id = res.race_id
+                LEFT JOIN skippers s ON res.skipper_id = s.id
+                WHERE LOWER(r.boat_name) LIKE LOWER($1)
+                GROUP BY r.boat_name, s.id, s.name, s.yacht_club
+                ORDER BY r.boat_name ASC
+            `;
+            params.push(`%${values.boatName}%`);
+            return { query: baseQuery, params };
     }
 
     // Validate inputs
@@ -596,7 +619,7 @@ app.post('/api/chat', async (req, res) => {
 
             case "sailor_search":
                 if (result.rows.length === 0) {
-                    message = `I couldn't find any sailors or boats matching "${values.sailorName}". Try a different name or partial name.`;
+                    message = `I couldn't find any sailors or boats matching "${analysis.sailorName}". Try a different name or partial name.`;
                 } else {
                     message = `Found ${result.rows.length} match(es). `;
                     if (result.rows.length === 1) {
@@ -615,8 +638,25 @@ app.post('/api/chat', async (req, res) => {
 
             case "regatta_count":
                 message = `Found ${result.rows.length} regattas. `;
-                if (values.year) {
-                    message = `Found ${result.rows.length} regattas in ${values.year}. `;
+                if (analysis.year) {
+                    message = `Found ${result.rows.length} regattas in ${analysis.year}. `;
+                }
+                break;
+
+            case "boat_search":
+                if (result.rows.length === 0) {
+                    message = `I couldn't find any boats matching "${analysis.boatName}". Try a different name or partial name.`;
+                } else {
+                    message = `Found ${result.rows.length} match(es). `;
+                    if (result.rows.length === 1) {
+                        const boat = result.rows[0];
+                        message += `${boat.boat_name} is a boat. `;
+                        message += `It is skippered by ${boat.skipper_name} from ${boat.yacht_club || 'unknown club'}. `;
+                        message += `It has competed in ${boat.total_races} races with ${boat.wins} wins. `;
+                        if (boat.best_position) {
+                            message += `Best finish: ${boat.best_position}${boat.best_position === 1 ? 'st' : 'th'} place.`;
+                        }
+                    }
                 }
                 break;
 
