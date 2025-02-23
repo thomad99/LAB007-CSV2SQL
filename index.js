@@ -188,6 +188,7 @@ function generateSQL(analysis) {
 
     switch (analysis.queryType) {
         case "sailor_search":
+            values.sailorName = analysis.sailorName;
             baseQuery = `
                 SELECT 
                     s.name as skipper_name,
@@ -214,9 +215,8 @@ function generateSQL(analysis) {
                 GROUP BY s.id, s.name, s.yacht_club, r.boat_name
                 ORDER BY s.name ASC
             `;
-            values.sailorName = analysis.sailorName;
             params.push(`%${values.sailorName}%`);
-            break;
+            return { query: baseQuery, params };
 
         case "database_status":
             return {
