@@ -414,6 +414,7 @@ async function bulkInsertData(rows) {
 
         // Clean and validate data
         const cleanRows = rows.map(row => ({
+            originalLineNumber: row._lineNumber, // Preserve the line number
             regattaName: row.Regatta_Name?.trim() || null,
             regattaDate: parseDate(row.Regatta_Date) || null,
             skipper: row.Skipper?.trim() || null,
@@ -435,49 +436,65 @@ async function bulkInsertData(rows) {
         
         // Insert skippers one by one to handle duplicates properly
         for (const skipperName of uniqueSkippers) {
-            const result = await client.query(
-                `INSERT INTO skippers (name, yacht_club) 
-                 VALUES ($1, $2)
-                 ON CONFLICT (name) 
-                 DO UPDATE SET yacht_club = COALESCE($2, skippers.yacht_club)
-                 RETURNING id`,
-                [
-                    skipperName,
-                    cleanRows.find(r => r.skipper === skipperName)?.yachtClub
-                ]
-            );
-            skipperMap.set(skipperName, result.rows[0].id);
+            try {
+                const result = await client.query(
+                    `INSERT INTO skippers (name, yacht_club) 
+                     VALUES ($1, $2)
+                     ON CONFLICT (name) 
+                     DO UPDATE SET yacht_club = COALESCE($2, skippers.yacht_club)
+                     RETURNING id`,
+                    [
+                        skipperName,
+                        cleanRows.find(r => r.skipper === skipperName)?.yachtClub
+                    ]
+                );
+                skipperMap.set(skipperName, result.rows[0].id);
+            } catch (error) {
+                const affectedRow = cleanRows.find(r => r.skipper === skipperName);
+                throw new Error(`Error inserting skipper "${skipperName}" from row ${affectedRow.originalLineNumber}: ${error.message}`);
+            }
         }
 
         // Insert races and get their IDs
-        const raceResults = await Promise.all(cleanRows.map(row => 
-            client.query(
-                `INSERT INTO races (regatta_name, regatta_date, category, boat_name, sail_number)
-                 VALUES ($1, $2, $3, $4, $5)
-                 RETURNING id`,
-                [row.regattaName, row.regattaDate, row.category, row.boatName, row.sailNumber]
-            )
-        ));
+        const raceResults = [];
+        for (const [index, row] of cleanRows.entries()) {
+            try {
+                const result = await client.query(
+                    `INSERT INTO races (regatta_name, regatta_date, category, boat_name, sail_number)
+                     VALUES ($1, $2, $3, $4, $5)
+                     RETURNING id`,
+                    [row.regattaName, row.regattaDate, row.category, row.boatName, row.sailNumber]
+                );
+                raceResults[index] = result;
+            } catch (error) {
+                throw new Error(`Error inserting race from row ${row.originalLineNumber}: ${error.message}`);
+            }
+        }
 
         // Insert results using the skipper and race IDs
-        await Promise.all(cleanRows.map((row, index) => {
-            if (!row.position && !row.totalPoints) return Promise.resolve();
-            return client.query(
-                `INSERT INTO results (race_id, skipper_id, position, total_points)
-                 VALUES ($1, $2, $3, $4)`,
-                [
-                    raceResults[index].rows[0].id,
-                    row.skipper ? skipperMap.get(row.skipper) : null,
-                    row.position,
-                    row.totalPoints
-                ]
-            );
-        }));
+        for (const [index, row] of cleanRows.entries()) {
+            try {
+                if (!row.position && !row.totalPoints) continue;
+                await client.query(
+                    `INSERT INTO results (race_id, skipper_id, position, total_points)
+                     VALUES ($1, $2, $3, $4)`,
+                    [
+                        raceResults[index].rows[0].id,
+                        row.skipper ? skipperMap.get(row.skipper) : null,
+                        row.position,
+                        row.totalPoints
+                    ]
+                );
+            } catch (error) {
+                throw new Error(`Error inserting results from row ${row.originalLineNumber}: ${error.message}`);
+            }
+        }
 
         await client.query('COMMIT');
         return cleanRows.length;
     } catch (error) {
         await client.query('ROLLBACK');
+        console.error('Bulk insert error:', error);
         throw error;
     } finally {
         client.release();
