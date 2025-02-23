@@ -165,6 +165,32 @@
             background-color: #6c757d;
             cursor: not-allowed;
         }
+        .debug-box {
+            background-color: #2b2b2b;
+            color: #fff;
+            padding: 15px;
+            margin-top: 20px;
+            border-radius: 8px;
+            font-family: monospace;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .debug-box .error {
+            color: #ff6b6b;
+            margin: 5px 0;
+        }
+        .debug-box .success {
+            color: #69db7c;
+            margin: 5px 0;
+        }
+        .debug-box .info {
+            color: #4dabf7;
+            margin: 5px 0;
+        }
+        .debug-box .timestamp {
+            color: #ffd43b;
+            margin-right: 8px;
+        }
     </style>
 </head>
 <body>
@@ -207,6 +233,9 @@
             <button id="backupBtn" class="backup-btn">Create Backup</button>
             <button id="restoreBtn" class="restore-btn" disabled>Restore Latest Backup</button>
         </div>
+        <div class="debug-box" id="debugBox">
+            <div class="info">Upload debug information will appear here...</div>
+        </div>
         <div id="debugWindow" class="debug-window"></div>
     </div>
 
@@ -218,10 +247,20 @@
         function logDebug(message, isError = false) {
             const now = new Date();
             const timestamp = now.toLocaleTimeString() + '.' + now.getMilliseconds().toString().padStart(3, '0');
+            
+            // Add to debug box
+            const debugBox = document.getElementById('debugBox');
             const entry = document.createElement('div');
-            entry.className = 'debug-entry';
-            entry.innerHTML = `<span class="debug-time">[${timestamp}]</span> <span class="${isError ? 'debug-error' : 'debug-message'}">${message}</span>`;
-            debugWindow.appendChild(entry);
+            entry.className = isError ? 'error' : 'info';
+            entry.innerHTML = `<span class="timestamp">[${timestamp}]</span> ${message}`;
+            debugBox.appendChild(entry);
+            debugBox.scrollTop = debugBox.scrollHeight;
+            
+            // Also keep existing debug window
+            const entry2 = document.createElement('div');
+            entry2.className = 'debug-entry';
+            entry2.innerHTML = `<span class="debug-time">[${timestamp}]</span> <span class="${isError ? 'debug-error' : 'debug-message'}">${message}</span>`;
+            debugWindow.appendChild(entry2);
             debugWindow.scrollTop = debugWindow.scrollHeight;
         }
 
@@ -316,14 +355,16 @@
 
                 if (response.ok) {
                     logDebug(`Success! Imported ${result.rowsImported} rows in ${duration}s`);
+                    logDebug(`✅ Upload completed successfully`, false);
                     status.textContent = `Success! ${result.rowsImported} rows imported.`;
                     status.classList.add('success');
                     form.reset();
-                    // Update database status after successful upload
                     updateDatabaseStatus();
                 } else {
                     const errorMsg = `Error: ${result.error}`;
+                    const detailMsg = result.details ? `\n➤ ${result.details}` : '';
                     logDebug(errorMsg, true);
+                    logDebug(detailMsg, true);
                     status.textContent = errorMsg;
                     status.classList.add('error');
                 }
