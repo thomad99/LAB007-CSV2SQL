@@ -593,6 +593,7 @@ app.post('/upload', upload.single('file'), async (req, res) => {
     console.log('Starting file upload process');
     try {
         const results = [];
+        let lineNumber = 1; // Track header row
         fs.createReadStream(req.file.path)
             .pipe(parse({
                 columns: true,
@@ -600,6 +601,8 @@ app.post('/upload', upload.single('file'), async (req, res) => {
                 trim: true
             }))
             .on('data', (data) => {
+                lineNumber++; // Increment for each data row
+                data._lineNumber = lineNumber; // Store line number with row data
                 results.push(data);
             })
             .on('end', async () => {
@@ -612,44 +615,67 @@ app.post('/upload', upload.single('file'), async (req, res) => {
 
                     // Validate required columns and data
                     for (const row of results) {
-                        if (!row.Regatta_Name?.trim()) throw new Error(`Missing Regatta Name in row`);
-                        if (!row.Skipper?.trim()) throw new Error(`Missing Skipper in row`);
-                        if (!row.Regatta_Date?.trim()) throw new Error(`Missing Date in row`);
+                        try {
+                            const rowNum = row._lineNumber;
+                            if (!row.Regatta_Name?.trim()) {
+                                throw new Error(`Missing Regatta Name in row ${rowNum}`);
+                            }
+                            if (!row.Skipper?.trim()) {
+                                throw new Error(`Missing Skipper in row ${rowNum}`);
+                            }
+                            if (!row.Regatta_Date?.trim()) {
+                                throw new Error(`Missing Date in row ${rowNum}`);
+                            }
 
-                        // Validate date
-                        const dateStr = row.Regatta_Date.trim();
-                        let parsedDate;
-                        if (dateStr.includes('/')) {
-                            const [month, day, year] = dateStr.split('/');
-                            parsedDate = new Date(year, month - 1, day);
-                        } else if (dateStr.includes('-')) {
-                            parsedDate = new Date(dateStr);
-                        } else if (dateStr.match(/[A-Za-z]+/)) {
-                            parsedDate = new Date(dateStr);
-                            if (isNaN(parsedDate.getTime())) {
-                                const match = dateStr.match(/([A-Za-z]+)\s+(\d+),?\s+(\d{4})/);
-                                if (match) {
-                                    const [_, month, day, year] = match;
-                                    parsedDate = new Date(`${month} ${day}, ${year}`);
+                            // Validate date
+                            const dateStr = row.Regatta_Date.trim();
+                            let parsedDate;
+                            if (dateStr.includes('/')) {
+                                const [month, day, year] = dateStr.split('/');
+                                parsedDate = new Date(year, month - 1, day);
+                            } else if (dateStr.includes('-')) {
+                                parsedDate = new Date(dateStr);
+                            } else if (dateStr.match(/[A-Za-z]+/)) {
+                                parsedDate = new Date(dateStr);
+                                if (isNaN(parsedDate.getTime())) {
+                                    const match = dateStr.match(/([A-Za-z]+)\s+(\d+),?\s+(\d{4})/);
+                                    if (match) {
+                                        const [_, month, day, year] = match;
+                                        parsedDate = new Date(`${month} ${day}, ${year}`);
+                                    }
                                 }
                             }
-                        }
-                        if (isNaN(parsedDate?.getTime())) {
-                            throw new Error(`Invalid date format: ${dateStr}`);
+                            if (isNaN(parsedDate?.getTime())) {
+                                throw new Error(`Invalid date format in row ${rowNum}: ${dateStr}`);
+                            }
+                        } catch (rowError) {
+                            // Add line number context to error if not already present
+                            const errorMessage = rowError.message.includes('row') 
+                                ? rowError.message 
+                                : `Error in row ${row._lineNumber}: ${rowError.message}`;
+                            throw new Error(errorMessage);
                         }
                     }
 
                     // Bulk insert all data
-                    const rowsInserted = await bulkInsertData(results);
+                    try {
+                        const rowsInserted = await bulkInsertData(results);
+                        // Clean up
+                        fs.unlinkSync(req.file.path);
+                        console.log('Upload completed successfully');
 
-                    // Clean up
-                    fs.unlinkSync(req.file.path);
-                    console.log('Upload completed successfully');
-
-                    res.json({
-                        message: 'Regatta results successfully imported',
-                        rowsImported: rowsInserted
-                    });
+                        res.json({
+                            message: 'Regatta results successfully imported',
+                            rowsImported: rowsInserted
+                        });
+                    } catch (dbError) {
+                        // Try to identify which row caused the database error
+                        const errorRow = extractRowNumberFromError(dbError.message);
+                        const errorMessage = errorRow 
+                            ? `Database error on row ${errorRow}: ${dbError.message}`
+                            : dbError.message;
+                        throw new Error(errorMessage);
+                    }
                 } catch (error) {
                     console.error('Upload error:', error);
                     res.status(500).json({ 
@@ -831,3 +857,21 @@ app.post('/api/restore-database', async (req, res) => {
         res.status(500).json({ error: 'Failed to restore database' });
     }
 });
+
+// Helper function to try to extract row numbers from common database error messages
+function extractRowNumberFromError(errorMessage) {
+    // Look for common patterns in error messages that might indicate the problematic row
+    const patterns = [
+        /row (\d+)/i,
+        /line (\d+)/i,
+        /index (\d+)/i
+    ];
+    
+    for (const pattern of patterns) {
+        const match = errorMessage.match(pattern);
+        if (match && match[1]) {
+            return match[1];
+        }
+    }
+    return null;
+}
