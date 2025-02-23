@@ -190,18 +190,31 @@ function generateSQL(analysis) {
         case "sailor_search":
             baseQuery = `
                 SELECT 
-                    s.name,
+                    s.name as skipper_name,
                     s.yacht_club,
+                    r.boat_name,
                     COUNT(DISTINCT r.id) as total_races,
                     COUNT(DISTINCT CASE WHEN res.position = 1 THEN r.id END) as wins,
                     MIN(res.position) as best_position,
                     MIN(r.regatta_date) as first_race,
                     MAX(r.regatta_date) as last_race
-                FROM skippers s
+                FROM (
+                    SELECT id, name, yacht_club 
+                    FROM skippers 
+                    WHERE LOWER(name) LIKE LOWER($1)
+                    UNION
+                    SELECT DISTINCT s.id, s.name, s.yacht_club
+                    FROM skippers s
+                    JOIN results res ON s.id = res.skipper_id
+                    JOIN races r ON res.race_id = r.id
+                    WHERE LOWER(r.boat_name) LIKE LOWER($1)
+                ) s
                 LEFT JOIN results res ON s.id = res.skipper_id
                 LEFT JOIN races r ON res.race_id = r.id
-                WHERE 1=1
+                GROUP BY s.id, s.name, s.yacht_club, r.boat_name
+                ORDER BY s.name ASC
             `;
+            params.push(`%${values.sailorName}%`);
             break;
 
         case "database_status":
@@ -321,19 +334,19 @@ async function initializeDatabase() {
         await pool.query(`
             CREATE TABLE IF NOT EXISTS races (
                 id SERIAL PRIMARY KEY,
-                regatta_name VARCHAR(500),
+                regatta_name VARCHAR(200),
                 regatta_date DATE,
-                category VARCHAR(255),
-                boat_name VARCHAR(500),
-                sail_number VARCHAR(100),
+                category VARCHAR(200),
+                boat_name VARCHAR(200),
+                sail_number VARCHAR(200),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
             CREATE TABLE IF NOT EXISTS skippers (
                 id SERIAL PRIMARY KEY,
-                name VARCHAR(500) NOT NULL UNIQUE,
-                yacht_club VARCHAR(500),
+                name VARCHAR(200) NOT NULL UNIQUE,
+                yacht_club VARCHAR(200),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
@@ -425,6 +438,28 @@ async function bulkInsertData(rows) {
             position: row.Position ? parseInt(row.Position.toString().trim()) : null,
             totalPoints: row.Total_Points ? parseFloat(row.Total_Points.toString().trim()) : null
         }));
+
+        // Validate field lengths
+        for (const row of cleanRows) {
+            if (row.regattaName && row.regattaName.length > 200) {
+                throw new Error(`Regatta name too long (max 200 chars) in row ${row.originalLineNumber}`);
+            }
+            if (row.category && row.category.length > 200) {
+                throw new Error(`Category too long (max 200 chars) in row ${row.originalLineNumber}`);
+            }
+            if (row.boatName && row.boatName.length > 200) {
+                throw new Error(`Boat name too long (max 200 chars) in row ${row.originalLineNumber}`);
+            }
+            if (row.sailNumber && row.sailNumber.length > 200) {
+                throw new Error(`Sail number too long (max 200 chars) in row ${row.originalLineNumber}`);
+            }
+            if (row.skipper && row.skipper.length > 200) {
+                throw new Error(`Skipper name too long (max 200 chars) in row ${row.originalLineNumber}`);
+            }
+            if (row.yachtClub && row.yachtClub.length > 200) {
+                throw new Error(`Yacht club name too long (max 200 chars) in row ${row.originalLineNumber}`);
+            }
+        }
 
         // Get unique skippers
         const uniqueSkippers = [...new Set(cleanRows
@@ -560,12 +595,15 @@ app.post('/api/chat', async (req, res) => {
 
             case "sailor_search":
                 if (result.rows.length === 0) {
-                    message = `I couldn't find any sailors matching "${values.sailorName}". Try a different name or partial name.`;
+                    message = `I couldn't find any sailors or boats matching "${values.sailorName}". Try a different name or partial name.`;
                 } else {
-                    message = `Found ${result.rows.length} sailor(s). `;
+                    message = `Found ${result.rows.length} match(es). `;
                     if (result.rows.length === 1) {
                         const sailor = result.rows[0];
-                        message += `${sailor.name} from ${sailor.yacht_club || 'unknown club'} `;
+                        const matchType = sailor.boat_name ? 
+                            `skipper of boat "${sailor.boat_name}"` : 
+                            `from ${sailor.yacht_club || 'unknown club'}`;
+                        message += `${sailor.skipper_name} ${matchType} `;
                         message += `has competed in ${sailor.total_races} races with ${sailor.wins} wins. `;
                         if (sailor.best_position) {
                             message += `Best finish: ${sailor.best_position}${sailor.best_position === 1 ? 'st' : 'th'} place.`;
