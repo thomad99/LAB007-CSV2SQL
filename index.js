@@ -68,114 +68,32 @@ function validateInput(value, type = 'string') {
 // Function to analyze query using GPT
 async function analyzeQuery(query) {
     try {
-        const completion = await openai.chat.completions.create({
+        const response = await openai.chat.completions.create({
             model: "gpt-3.5-turbo",
             messages: [
                 {
                     role: "system",
-                    content: `You are a sailing race database assistant. You help users find information about sailors, races, and results.
-
-Database Structure:
-- Skippers (also called sailors, racers, people, competitors):
-  * name: Person's full name
-  * yacht_club: Their club/team affiliation
-
-- Races (also called regattas, events, competitions):
-  * regatta_name: Event name
-  * regatta_date: When it happened
-  * category: Type of race/class
-  * boat_name: Name of the vessel
-  * sail_number: Boat's registration number
-
-- Results: Links skippers to races with their finishing data
-  * position: Place they finished (1st, 2nd, etc.)
-  * total_points: Points awarded
-
-Common Questions You Can Answer:
-1. Finding People:
-   - "find sailor/skipper/person [name]"
-   - "who is [name]?"
-   - "tell me about [name]"
-   - "search for [name]"
-   - "lookup [name]"
-   -> Return: {"queryType": "sailor_search", "sailorName": "[name]"}
-
-2. Database Information:
-   - "how many sailors/skippers/people do you know?"
-   - "what's in the database?"
-   - "show database stats/info"
-   - "how many races/regattas are there?"
-   -> Return: {"queryType": "database_status"}
-
-3. Race Information:
-   - "list regattas/races/events"
-   - "what races do you have?"
-   - "show races from [year]"
-   - "regattas in [year]"
-   -> Return: {"queryType": "regatta_count", "year": "[year]"}
-
-4. Performance Stats:
-   - "who has won the most?"
-   - "best sailors/skippers"
-   - "top performers/racers"
-   - "who's winning?"
-   -> Return: {"queryType": "performance_stats"}
-
-5. Club Information:
-   - "sailors/people from [club]"
-   - "who sails for [club]"
-   - "members of [club]"
-   - "[club] team"
-   -> Return: {"queryType": "team_members", "yachtClub": "[club]"}
-
-Understand these synonyms:
-- Person = Sailor = Skipper = Racer = Competitor
-- Race = Regatta = Event = Competition
-- Club = Team = Yacht Club = Organization
-
-Always try to understand partial or informal queries:
-- "find John" -> sailor_search with "John"
-- "races 2023" -> regatta_count with year 2023
-- "ASC team" -> team_members with "ASC"
-- "who is winning" -> performance_stats
-- "show me John" -> sailor_search with "John"
-
-If you don't understand the query, default to:
-{"queryType": "database_status"}
-
-Response Format:
-{
-    "queryType": "one_of_the_types_above",
-    "sailorName": "extracted_name_or_null",
-    "yachtClub": "extracted_club_or_null",
-    "year": "extracted_year_or_null",
-    "regattaName": "extracted_regatta_or_null"
-}`
+                    content: `You analyze sailing competition queries and extract structured data.
+                        For sailor/skipper/racer name queries, set type to "sailor_search" regardless of whether
+                        the word sailor, skipper, racer, or just a name is used.
+                        Extract the name after any of these words or patterns:
+                        - "find skipper/sailor/racer <name>"
+                        - "search for skipper/sailor/racer <name>"
+                        - "tell me about skipper/sailor/racer <name>"
+                        - "who is <name>"
+                        - "<name>'s results"
+                        - "show me <name>"
+                        Return just the name if none of these patterns match but a name is detected.`
                 },
-                {
-                    role: "user",
-                    content: query
-                }
+                { role: "user", content: query }
             ],
-            temperature: 0.1,
+            temperature: 0
         });
 
-        // Add safety checks for the OpenAI response
-        if (!completion?.choices?.[0]?.message?.content) {
-            console.error('Invalid OpenAI response structure:', completion);
-            throw new Error('Failed to get a valid response from OpenAI');
-        }
-
-        try {
-            return JSON.parse(completion.choices[0].message.content);
-        } catch (parseError) {
-            console.error('Failed to parse OpenAI response:', completion.choices[0].message.content);
-            throw new Error('Failed to parse the AI response as JSON');
-        }
-
+        return JSON.parse(response.choices[0].message.content);
     } catch (error) {
-        console.error('GPT Analysis error:', error);
-        throw error;
+        console.error('Query analysis error:', error);
+        throw new Error('Failed to analyze query');
     }
 }
 
@@ -194,6 +112,7 @@ function generateSQL(analysis) {
                     s.name as skipper_name,
                     s.yacht_club,
                     r.boat_name,
+                    r.regatta_name,
                     COUNT(DISTINCT r.id) as total_races,
                     COUNT(DISTINCT CASE WHEN res.position = 1 THEN r.id END) as wins,
                     MIN(res.position) as best_position,
@@ -213,7 +132,7 @@ function generateSQL(analysis) {
                 LEFT JOIN results res ON s.id = res.skipper_id
                 LEFT JOIN races r ON res.race_id = r.id
                 WHERE s.name LIKE '%' || $1 || '%' OR r.boat_name LIKE '%' || $1 || '%'
-                GROUP BY s.id, s.name, s.yacht_club, r.boat_name
+                GROUP BY s.id, s.name, s.yacht_club, r.boat_name, r.regatta_name
                 ORDER BY s.name ASC
             `;
             params.push(values.sailorName);
