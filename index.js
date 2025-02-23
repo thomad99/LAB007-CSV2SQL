@@ -214,6 +214,7 @@ function generateSQL(analysis) {
                 GROUP BY s.id, s.name, s.yacht_club, r.boat_name
                 ORDER BY s.name ASC
             `;
+            values.sailorName = analysis.sailorName;
             params.push(`%${values.sailorName}%`);
             break;
 
