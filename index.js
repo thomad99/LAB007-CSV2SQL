@@ -334,19 +334,19 @@ async function initializeDatabase() {
         await pool.query(`
             CREATE TABLE IF NOT EXISTS races (
                 id SERIAL PRIMARY KEY,
-                regatta_name VARCHAR(200),
+                regatta_name VARCHAR(300),
                 regatta_date DATE,
-                category VARCHAR(200),
-                boat_name VARCHAR(200),
-                sail_number VARCHAR(200),
+                category VARCHAR(300),
+                boat_name VARCHAR(300),
+                sail_number VARCHAR(300),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
             CREATE TABLE IF NOT EXISTS skippers (
                 id SERIAL PRIMARY KEY,
-                name VARCHAR(200) NOT NULL UNIQUE,
-                yacht_club VARCHAR(200),
+                name VARCHAR(300) NOT NULL UNIQUE,
+                yacht_club VARCHAR(300),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
@@ -441,23 +441,23 @@ async function bulkInsertData(rows) {
 
         // Validate field lengths
         for (const row of cleanRows) {
-            if (row.regattaName && row.regattaName.length > 200) {
-                throw new Error(`Regatta name too long (max 200 chars) in row ${row.originalLineNumber}`);
+            if (row.regattaName && row.regattaName.length > 300) {
+                throw new Error(`Regatta name too long (max 300 chars) in row ${row.originalLineNumber}`);
             }
-            if (row.category && row.category.length > 200) {
-                throw new Error(`Category too long (max 200 chars) in row ${row.originalLineNumber}`);
+            if (row.category && row.category.length > 300) {
+                throw new Error(`Category too long (max 300 chars) in row ${row.originalLineNumber}`);
             }
-            if (row.boatName && row.boatName.length > 200) {
-                throw new Error(`Boat name too long (max 200 chars) in row ${row.originalLineNumber}`);
+            if (row.boatName && row.boatName.length > 300) {
+                throw new Error(`Boat name too long (max 300 chars) in row ${row.originalLineNumber}`);
             }
-            if (row.sailNumber && row.sailNumber.length > 200) {
-                throw new Error(`Sail number too long (max 200 chars) in row ${row.originalLineNumber}`);
+            if (row.sailNumber && row.sailNumber.length > 300) {
+                throw new Error(`Sail number too long (max 300 chars) in row ${row.originalLineNumber}`);
             }
-            if (row.skipper && row.skipper.length > 200) {
-                throw new Error(`Skipper name too long (max 200 chars) in row ${row.originalLineNumber}`);
+            if (row.skipper && row.skipper.length > 300) {
+                throw new Error(`Skipper name too long (max 300 chars) in row ${row.originalLineNumber}`);
             }
-            if (row.yachtClub && row.yachtClub.length > 200) {
-                throw new Error(`Yacht club name too long (max 200 chars) in row ${row.originalLineNumber}`);
+            if (row.yachtClub && row.yachtClub.length > 300) {
+                throw new Error(`Yacht club name too long (max 300 chars) in row ${row.originalLineNumber}`);
             }
         }
 
