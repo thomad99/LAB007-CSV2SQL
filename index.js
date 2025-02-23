@@ -764,6 +764,7 @@ app.get('*', (req, res) => {
 app.listen(port, async () => {
     try {
         await initializeDatabase();
+        await updateDatabaseSchema();
         console.log(`CSV2POSTGRES Service is running on port ${port}`);
     } catch (error) {
         console.error('Failed to start server:', error);
@@ -929,4 +930,25 @@ function extractRowNumberFromError(errorMessage) {
         }
     }
     return null;
+}
+
+// Add this function to update existing tables
+async function updateDatabaseSchema() {
+    try {
+        await pool.query(`
+            ALTER TABLE skippers 
+            ALTER COLUMN name TYPE VARCHAR(300),
+            ALTER COLUMN yacht_club TYPE VARCHAR(300);
+
+            ALTER TABLE races
+            ALTER COLUMN regatta_name TYPE VARCHAR(300),
+            ALTER COLUMN category TYPE VARCHAR(300),
+            ALTER COLUMN boat_name TYPE VARCHAR(300),
+            ALTER COLUMN sail_number TYPE VARCHAR(300);
+        `);
+        console.log('Database schema updated successfully');
+    } catch (error) {
+        console.error('Failed to update database schema:', error);
+        throw error;
+    }
 }
