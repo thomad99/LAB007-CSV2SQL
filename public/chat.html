@@ -354,6 +354,66 @@
             return chartDiv;
         }
 
+        function displayResponse(response) {
+            const messageContainer = document.createElement('div');
+            messageContainer.className = 'message response';
+            
+            // Handle table data if present
+            if (response.data && response.data.length > 0) {
+                // Add text response first
+                if (response.message) {
+                    const textResponse = document.createElement('p');
+                    textResponse.textContent = response.message;
+                    messageContainer.appendChild(textResponse);
+                }
+                
+                // Create table for data
+                const table = document.createElement('table');
+                table.className = 'table-response';
+                
+                // Create table header
+                const thead = document.createElement('thead');
+                const headerRow = document.createElement('tr');
+                Object.keys(response.data[0]).forEach(key => {
+                    const th = document.createElement('th');
+                    th.textContent = key.replace(/_/g, ' ').toUpperCase();
+                    headerRow.appendChild(th);
+                });
+                thead.appendChild(headerRow);
+                table.appendChild(thead);
+                
+                // Create table body
+                const tbody = document.createElement('tbody');
+                response.data.forEach(row => {
+                    const tr = document.createElement('tr');
+                    Object.values(row).forEach(value => {
+                        const td = document.createElement('td');
+                        // Format dates if the value looks like a date
+                        if (value && value.includes && value.includes('T')) {
+                            const date = new Date(value);
+                            if (!isNaN(date)) {
+                                td.textContent = date.toLocaleDateString();
+                            } else {
+                                td.textContent = value;
+                            }
+                        } else {
+                            td.textContent = value;
+                        }
+                        tr.appendChild(td);
+                    });
+                    tbody.appendChild(tr);
+                });
+                table.appendChild(tbody);
+                messageContainer.appendChild(table);
+            } else {
+                // Just show the text response if no data
+                messageContainer.textContent = response.message;
+            }
+
+            chatMessages.appendChild(messageContainer);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
         chatForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             const query = userInput.value.trim();
