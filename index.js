@@ -73,20 +73,75 @@ async function analyzeQuery(query) {
             messages: [
                 {
                     role: "system",
-                    content: `You are a query analyzer for a sailing database. Always respond with valid JSON.
-                        For any query about a person (using words like sailor/skipper/racer or just a name), return:
-                        {"queryType": "sailor_search", "sailorName": "the_name"}
+                    content: `You are a sailing race database assistant. You help users find information about sailors, races, and results.
+
+                        Database Structure:
+                        - Skippers (also called sailors, racers, people, competitors):
+                          * name: Person's full name
+                          * yacht_club: Their club/team affiliation
                         
-                        For boat searches, return:
-                        {"queryType": "boat_search", "boatName": "the_boat_name"}
+                        - Races (also called regattas, events, competitions):
+                          * regatta_name: Event name
+                          * regatta_date: When it happened
+                          * category: Type of race/class
+                          * boat_name: Name of the vessel
+                          * sail_number: Boat's registration number
                         
-                        For database status queries, return:
-                        {"queryType": "database_status"}
+                        - Results: Links skippers to races with their finishing data
+                          * position: Place they finished (1st, 2nd, etc.)
+                          * total_points: Points awarded
                         
-                        For regatta queries with year, return:
-                        {"queryType": "regatta_count", "year": "YYYY"}
+                        Common Questions You Can Answer:
+                        1. Finding People:
+                           - "find sailor/skipper/person [name]"
+                           - "who is [name]?"
+                           - "tell me about [name]"
+                           - "search for [name]"
+                           - "lookup [name]"
+                           -> Return: {"queryType": "sailor_search", "sailorName": "[name]"}
                         
-                        If unsure, return:
+                        2. Finding Boats:
+                           - "find boat [name]"
+                           - "search for boat [name]"
+                           - "what boat is [name]"
+                           -> Return: {"queryType": "boat_search", "boatName": "[name]"}
+                        
+                        3. Top Performers:
+                           - "who are the top [N] sailors from [club]"
+                           - "best sailors in [club]"
+                           - "top performers from [club]"
+                           -> Return: {"queryType": "top_sailors", "yachtClub": "[club]", "limit": N}
+                        
+                        4. Regatta Results:
+                           - "show results for [regatta]"
+                           - "who won [regatta]"
+                           - "positions in [regatta]"
+                           -> Return: {"queryType": "regatta_results", "regattaName": "[regatta]"}
+                        
+                        5. Database Information:
+                           - "how many sailors/races do you know?"
+                           - "what's in the database?"
+                           - "show database stats"
+                           -> Return: {"queryType": "database_status"}
+                        
+                        6. Regatta Counts:
+                           - "list regattas in [year]"
+                           - "how many races in [year]"
+                           - "show races from [year]"
+                           -> Return: {"queryType": "regatta_count", "year": "[year]"}
+                        
+                        Understand these synonyms:
+                        - Person = Sailor = Skipper = Racer = Competitor
+                        - Race = Regatta = Event = Competition
+                        - Club = Team = Yacht Club = Organization
+                        
+                        Always try to understand partial or informal queries:
+                        - "find John" -> sailor_search with "John"
+                        - "races 2023" -> regatta_count with year 2023
+                        - "SYS team" -> top_sailors with "SYS"
+                        - "Spring Series results" -> regatta_results with "Spring Series"
+                        
+                        If you don't understand the query, return:
                         {"queryType": "database_status"}
                         
                         IMPORTANT: Always return valid JSON, never plain text.`
@@ -188,6 +243,49 @@ function generateSQL(analysis) {
                 ORDER BY r.boat_name ASC
             `;
             params.push(`%${values.boatName}%`);
+            return { query: baseQuery, params };
+
+        case "top_sailors":
+            values.yachtClub = analysis.yachtClub;
+            values.limit = analysis.limit || 5;
+            baseQuery = `
+                SELECT 
+                    s.name as skipper_name,
+                    s.yacht_club,
+                    COUNT(DISTINCT r.id) as total_races,
+                    COUNT(DISTINCT CASE WHEN res.position = 1 THEN r.id END) as wins,
+                    ROUND(AVG(res.position), 2) as avg_position,
+                    MIN(res.position) as best_position
+                FROM skippers s
+                JOIN results res ON s.id = res.skipper_id
+                JOIN races r ON res.race_id = r.id
+                WHERE LOWER(s.yacht_club) = LOWER($1)
+                GROUP BY s.id, s.name, s.yacht_club
+                ORDER BY wins DESC, avg_position ASC
+                LIMIT $2
+            `;
+            params.push(values.yachtClub, values.limit);
+            return { query: baseQuery, params };
+
+        case "regatta_results":
+            values.regattaName = analysis.regattaName;
+            baseQuery = `
+                SELECT 
+                    r.regatta_name,
+                    r.regatta_date,
+                    r.category,
+                    s.name as skipper_name,
+                    s.yacht_club,
+                    r.boat_name,
+                    res.position,
+                    res.total_points
+                FROM races r
+                JOIN results res ON r.id = res.race_id
+                JOIN skippers s ON res.skipper_id = s.id
+                WHERE LOWER(r.regatta_name) LIKE LOWER('%' || $1 || '%')
+                ORDER BY r.regatta_date DESC, res.position ASC
+            `;
+            params.push(values.regattaName);
             return { query: baseQuery, params };
     }
 
@@ -578,6 +676,32 @@ app.post('/api/chat', async (req, res) => {
                             message += `Best finish: ${boat.best_position}${boat.best_position === 1 ? 'st' : 'th'} place.`;
                         }
                     }
+                }
+                break;
+
+            case "top_sailors":
+                if (result.rows.length === 0) {
+                    message = `I couldn't find any sailors from "${analysis.yachtClub}".`;
+                } else {
+                    message = `Top ${result.rows.length} sailors from ${analysis.yachtClub}:\n`;
+                    result.rows.forEach((sailor, index) => {
+                        message += `\n${index + 1}. ${sailor.skipper_name}: ${sailor.wins} wins from ${sailor.total_races} races`;
+                        message += ` (best: ${sailor.best_position}${sailor.best_position === 1 ? 'st' : 'th'} place)`;
+                    });
+                }
+                break;
+
+            case "regatta_results":
+                if (result.rows.length === 0) {
+                    message = `I couldn't find any results for "${analysis.regattaName}".`;
+                } else {
+                    const regatta = result.rows[0];
+                    message = `Results for ${regatta.regatta_name} (${new Date(regatta.regatta_date).toLocaleDateString()}):\n`;
+                    result.rows.forEach((row, index) => {
+                        message += `\n${row.position}${row.position === 1 ? 'st' : 'th'}: ${row.skipper_name}`;
+                        if (row.boat_name) message += ` on ${row.boat_name}`;
+                        if (row.yacht_club) message += ` (${row.yacht_club})`;
+                    });
                 }
                 break;
 
