@@ -73,24 +73,36 @@ async function analyzeQuery(query) {
             messages: [
                 {
                     role: "system",
-                    content: `You analyze sailing competition queries and extract structured data.
-                        For sailor/skipper/racer name queries, set type to "sailor_search" regardless of whether
-                        the word sailor, skipper, racer, or just a name is used.
-                        Extract the name after any of these words or patterns:
-                        - "find skipper/sailor/racer <name>"
-                        - "search for skipper/sailor/racer <name>"
-                        - "tell me about skipper/sailor/racer <name>"
-                        - "who is <name>"
-                        - "<name>'s results"
-                        - "show me <name>"
-                        Return just the name if none of these patterns match but a name is detected.`
+                    content: `You are a query analyzer for a sailing database. Always respond with valid JSON.
+                        For any query about a person (using words like sailor/skipper/racer or just a name), return:
+                        {"queryType": "sailor_search", "sailorName": "the_name"}
+                        
+                        For boat searches, return:
+                        {"queryType": "boat_search", "boatName": "the_boat_name"}
+                        
+                        For database status queries, return:
+                        {"queryType": "database_status"}
+                        
+                        For regatta queries with year, return:
+                        {"queryType": "regatta_count", "year": "YYYY"}
+                        
+                        If unsure, return:
+                        {"queryType": "database_status"}
+                        
+                        IMPORTANT: Always return valid JSON, never plain text.`
                 },
                 { role: "user", content: query }
             ],
             temperature: 0
         });
 
-        return JSON.parse(response.choices[0].message.content);
+        const content = response.choices[0].message.content.trim();
+        try {
+            return JSON.parse(content);
+        } catch (error) {
+            console.error('Failed to parse OpenAI response:', content);
+            return { queryType: "database_status" };
+        }
     } catch (error) {
         console.error('Query analysis error:', error);
         throw new Error('Failed to analyze query');
