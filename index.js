@@ -130,20 +130,10 @@ function generateSQL(analysis) {
                     MIN(res.position) as best_position,
                     MIN(r.regatta_date) as first_race,
                     MAX(r.regatta_date) as last_race
-                FROM (
-                    SELECT id, name, yacht_club 
-                    FROM skippers 
-                    WHERE LOWER(name) LIKE LOWER('%' || $1 || '%')
-                    UNION
-                    SELECT DISTINCT s.id, s.name, s.yacht_club
-                    FROM skippers s
-                    JOIN results res ON s.id = res.skipper_id
-                    JOIN races r ON res.race_id = r.id
-                    WHERE LOWER(r.boat_name) LIKE LOWER('%' || $1 || '%')
-                ) s
+                FROM skippers s
                 LEFT JOIN results res ON s.id = res.skipper_id
                 LEFT JOIN races r ON res.race_id = r.id
-                WHERE s.name LIKE '%' || $1 || '%' OR r.boat_name LIKE '%' || $1 || '%'
+                WHERE LOWER(s.name) LIKE LOWER('%' || $1 || '%')
                 GROUP BY s.id, s.name, s.yacht_club, r.boat_name, r.regatta_name
                 ORDER BY s.name ASC
             `;
